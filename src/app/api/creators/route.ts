@@ -12,9 +12,13 @@ export async function GET(request: NextRequest) {
     has_course: params.get('has_course') === 'true' ? true : undefined,
     has_discord: params.get('has_discord') === 'true' ? true : undefined,
     has_telegram: params.get('has_telegram') === 'true' ? true : undefined,
+    has_skool: params.get('has_skool') === 'true' ? true : undefined,
+    has_whop: params.get('has_whop') === 'true' ? true : undefined,
     promoting_prop_firms: params.get('promoting_prop_firms') === 'true' ? true : undefined,
     has_instagram: params.get('has_instagram') === 'true' ? true : undefined,
     has_linkedin: params.get('has_linkedin') === 'true' ? true : undefined,
+    has_website: params.get('has_website') === 'true' ? true : undefined,
+    high_confidence: params.get('high_confidence') === 'true' ? true : undefined,
     new_today: params.get('new_today') === 'true' ? true : undefined,
     status: params.get('status') as CreatorFilters['status'] ?? undefined,
     search: params.get('search') || undefined,
@@ -22,39 +26,36 @@ export async function GET(request: NextRequest) {
     sort_order: (params.get('sort_order') as CreatorFilters['sort_order']) || 'desc',
   };
 
-  if (!isSupabaseConfigured()) {
-    return NextResponse.json([]);
-  }
+  if (!isSupabaseConfigured()) return NextResponse.json([]);
 
   let query = supabase.from('creators').select('*, creator_accounts(*)');
 
-  if (filters.platform) {
-    query = query.contains('creator_accounts.platform', [filters.platform]);
-  }
+  if (filters.platform) query = query.contains('creator_accounts.platform', [filters.platform]);
   if (filters.min_followers) query = query.gte('total_followers', filters.min_followers);
   if (filters.max_followers) query = query.lte('total_followers', filters.max_followers);
   if (filters.has_course) query = query.eq('has_course', true);
   if (filters.has_discord) query = query.eq('has_discord', true);
   if (filters.has_telegram) query = query.eq('has_telegram', true);
+  if (filters.has_skool) query = query.eq('has_skool', true);
+  if (filters.has_whop) query = query.eq('has_whop', true);
   if (filters.promoting_prop_firms) query = query.eq('promoting_prop_firms', true);
   if (filters.has_instagram) query = query.not('instagram_url', 'is', null);
   if (filters.has_linkedin) query = query.not('linkedin_url', 'is', null);
+  if (filters.has_website) query = query.not('website', 'is', null);
+  if (filters.high_confidence) query = query.gte('confidence_score', 70);
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.search) query = query.ilike('name', `%${filters.search}%`);
 
-  // "New today" filter: first_seen_at starts with today's date
   if (filters.new_today) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     query = query.gte('first_seen_at', todayStart.toISOString());
   }
 
-  // Sort — map 'followers' to actual column name
   const sortColumn = filters.sort_by === 'followers' ? 'total_followers' : filters.sort_by ?? 'lead_score';
   query = query.order(sortColumn, { ascending: filters.sort_order === 'asc' });
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
   return NextResponse.json(data ?? []);
 }

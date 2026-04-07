@@ -7,13 +7,16 @@ import { youtubeProvider } from './youtube-provider';
 import { xProvider } from './x-provider';
 import { instagramProvider } from './instagram-provider';
 import { linkedinProvider } from './linkedin-provider';
+import { webSearchInstagramProvider, webSearchLinkedInProvider } from './web-search-provider';
 
 /** All registered providers, in execution order. */
 const providers: DiscoveryProvider[] = [
   youtubeProvider,
   xProvider,
-  instagramProvider,
-  linkedinProvider,
+  webSearchInstagramProvider,
+  webSearchLinkedInProvider,
+  instagramProvider,   // import-only fallback
+  linkedinProvider,    // import-only fallback
 ];
 
 /** Get all registered providers. */

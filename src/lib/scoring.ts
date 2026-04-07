@@ -6,8 +6,7 @@ interface ScoreInput {
 }
 
 /**
- * Compute a lead score (0-100) based on how valuable a creator is for outreach.
- * Higher = more likely to convert.
+ * Lead score (0-100): how valuable is this creator for outreach.
  */
 export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   let score = 0;
@@ -20,26 +19,33 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   else if (total >= 10_000) score += 10;
   else if (total >= 1_000) score += 5;
 
-  // Has public contact info
+  // Contact info
   if (creator.public_email) score += 15;
   if (creator.public_phone) score += 5;
   if (creator.website) score += 5;
 
-  // Community indicators
+  // Community / monetization
   if (creator.has_course) score += 10;
   if (creator.has_discord) score += 5;
   if (creator.has_telegram) score += 5;
+  if (creator.has_skool) score += 5;
+  if (creator.has_whop) score += 5;
 
   // Prop firm relevance
   if (creator.promoting_prop_firms) score += 15;
-  const firmCount = creator.prop_firms_mentioned?.length ?? 0;
-  score += Math.min(firmCount * 3, 9);
+  score += Math.min((creator.prop_firms_mentioned?.length ?? 0) * 3, 9);
 
-  // Multi-platform presence
+  // Multi-platform URL presence
+  const urls = [creator.youtube_url, creator.x_url, creator.instagram_url, creator.linkedin_url];
+  const urlCount = urls.filter(Boolean).length;
+  score += urlCount * 3; // max +12
+
+  // Link-in-bio (signals active online presence)
+  if (creator.link_in_bio_url) score += 2;
+
+  // Account-level signals
   const platformCount = new Set(accounts.map(a => a.platform)).size;
   score += Math.min(platformCount * 3, 9);
-
-  // Verified accounts bonus
   const verifiedCount = accounts.filter(a => a.verified).length;
   score += Math.min(verifiedCount * 2, 6);
 
@@ -47,26 +53,36 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
 }
 
 /**
- * Compute a confidence score (0-100) representing how complete/reliable the data is.
+ * Confidence score (0-100): how complete/reliable is the data.
  */
 export function computeConfidenceScore({ creator, accounts }: ScoreInput): number {
   let score = 0;
-  const fields: (keyof Creator)[] = [
+
+  // Core fields
+  const coreFields: (keyof Creator)[] = [
     'name', 'website', 'public_email', 'total_followers',
     'has_course', 'has_discord', 'has_telegram', 'promoting_prop_firms',
   ];
-
-  for (const field of fields) {
+  for (const field of coreFields) {
     const val = creator[field];
-    if (val !== null && val !== undefined && val !== '' && val !== 0) {
-      score += 10;
+    if (val !== null && val !== undefined && val !== '' && val !== 0 && val !== false) {
+      score += 8;
     }
   }
 
-  // Account data completeness
-  if (accounts.length > 0) score += 10;
-  if (accounts.some(a => a.bio)) score += 5;
-  if (accounts.some(a => a.followers && a.followers > 0)) score += 5;
+  // URL fields (each adds confidence that we have real data)
+  const urlFields: (keyof Creator)[] = [
+    'instagram_url', 'linkedin_url', 'youtube_url', 'x_url',
+    'link_in_bio_url', 'course_url', 'discord_url', 'telegram_url',
+  ];
+  for (const field of urlFields) {
+    if (creator[field]) score += 3;
+  }
+
+  // Account data
+  if (accounts.length > 0) score += 8;
+  if (accounts.some(a => a.bio)) score += 4;
+  if (accounts.some(a => a.followers && a.followers > 0)) score += 4;
 
   return Math.min(Math.round(score), 100);
 }

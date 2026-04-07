@@ -8,7 +8,7 @@
 
 import { isSupabaseConfigured, supabaseAdmin } from './db';
 import { enrichFromWebsite } from './integrations/website-enrichment';
-import { extractSocialLinks } from './social-links';
+import { extractAllSignals } from './social-links';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
 import { upsertCreator, logDiscoveryRun } from './pipeline';
 import { withLogging, log } from './logger';
@@ -89,17 +89,16 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
   const stats = { attempted: 0, enriched: 0, errors: 0 };
   if (!isSupabaseConfigured()) return stats;
 
-  // Enrich creators that have a website but are missing email, instagram, or linkedin
+  // Enrich creators with a website that are missing any enrichable fields
   const { data: creatorsToEnrich } = await supabaseAdmin
     .from('creators')
-    .select('id, website, public_email, instagram_url, linkedin_url, prop_firms_mentioned')
+    .select('id, website, public_email, instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, link_in_bio_url, course_url, has_skool, has_whop, prop_firms_mentioned')
     .not('website', 'is', null)
     .order('lead_score', { ascending: false })
     .limit(30);
 
-  // Filter to those missing at least one enrichable field
   const needsEnrichment = (creatorsToEnrich ?? []).filter(c =>
-    !c.public_email || !c.instagram_url || !c.linkedin_url,
+    !c.public_email || !c.instagram_url || !c.linkedin_url || !c.youtube_url || !c.x_url,
   );
   if (!needsEnrichment.length) return stats;
 
@@ -107,70 +106,55 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
     stats.attempted++;
     try {
       const enrichment = await enrichFromWebsite(creator.website);
-
-      // Extract IG/LI from the crawled pages
-      const allPageText = enrichment.pages_crawled.length > 0 ? '' : ''; // text is already in social_links
-      const socialFromPages = extractSocialLinks(
-        ...enrichment.social_links.map(l => l.url),
-      );
+      const allLinkText = enrichment.social_links.map(l => l.url).join(' ');
+      const signals = extractAllSignals(allLinkText);
 
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       let changed = false;
 
-      // Email and phone
-      if (enrichment.emails.length > 0 && !creator.public_email) {
-        updates.public_email = enrichment.emails[0];
-        changed = true;
-      }
-      if (enrichment.phones.length > 0) {
-        updates.public_phone = enrichment.phones[0];
-        changed = true;
-      }
+      // Contact info
+      if (enrichment.emails.length > 0 && !creator.public_email) { updates.public_email = enrichment.emails[0]; changed = true; }
+      if (enrichment.phones.length > 0) { updates.public_phone = enrichment.phones[0]; changed = true; }
 
-      // Boolean signals
+      // Boolean signals (only upgrade)
       if (enrichment.has_course) { updates.has_course = true; changed = true; }
       if (enrichment.has_discord) { updates.has_discord = true; changed = true; }
       if (enrichment.has_telegram) { updates.has_telegram = true; changed = true; }
+      if (signals.has_skool && !creator.has_skool) { updates.has_skool = true; changed = true; }
+      if (signals.has_whop && !creator.has_whop) { updates.has_whop = true; changed = true; }
 
       // Prop firms
       if (enrichment.prop_firms_mentioned.length > 0) {
         updates.promoting_prop_firms = true;
-        updates.prop_firms_mentioned = [
-          ...new Set([...(creator.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned]),
-        ];
+        updates.prop_firms_mentioned = [...new Set([...(creator.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned])];
         changed = true;
       }
 
-      // Instagram URL — from social_links or direct extraction
-      const igUrl = enrichment.social_links.find(l => l.platform === 'instagram')?.url
-        ?? socialFromPages.instagram_url;
-      if (igUrl && !creator.instagram_url) {
-        updates.instagram_url = igUrl;
-        changed = true;
-      }
-
-      // LinkedIn URL — from social_links or direct extraction
-      const liUrl = enrichment.social_links.find(l => l.platform === 'linkedin')?.url
-        ?? socialFromPages.linkedin_url;
-      if (liUrl && !creator.linkedin_url) {
-        updates.linkedin_url = liUrl;
-        changed = true;
+      // URLs — only fill if currently empty
+      const urlMap: [string, string | null, string | null][] = [
+        ['instagram_url', creator.instagram_url, enrichment.social_links.find(l => l.platform === 'instagram')?.url ?? signals.instagram_url],
+        ['linkedin_url', creator.linkedin_url, enrichment.social_links.find(l => l.platform === 'linkedin')?.url ?? signals.linkedin_url],
+        ['youtube_url', creator.youtube_url, enrichment.social_links.find(l => l.platform === 'youtube')?.url ?? signals.youtube_url],
+        ['x_url', creator.x_url, enrichment.social_links.find(l => l.platform === 'x')?.url ?? signals.x_url],
+        ['discord_url', creator.discord_url, signals.discord_url],
+        ['telegram_url', creator.telegram_url, signals.telegram_url],
+        ['link_in_bio_url', creator.link_in_bio_url, signals.link_in_bio_url],
+        ['course_url', creator.course_url, signals.course_url],
+      ];
+      for (const [field, existing, discovered] of urlMap) {
+        if (!existing && discovered) { updates[field] = discovered; changed = true; }
       }
 
       if (changed) {
         await supabaseAdmin.from('creators').update(updates).eq('id', creator.id);
 
-        // Recalculate scores
         const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', creator.id).single();
-        const { data: accounts } = await supabaseAdmin
-          .from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);
-
+        const { data: accounts } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);
         if (full) {
           const leadScore = computeLeadScore({ creator: full, accounts: accounts ?? [] });
           const confidenceScore = computeConfidenceScore({ creator: full, accounts: accounts ?? [] });
           await supabaseAdmin.from('creators').update({ lead_score: leadScore, confidence_score: confidenceScore }).eq('id', creator.id);
         }
-
         stats.enriched++;
       }
     } catch (err) {

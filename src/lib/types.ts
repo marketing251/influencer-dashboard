@@ -15,10 +15,22 @@ export interface Creator {
   has_course: boolean;
   has_discord: boolean;
   has_telegram: boolean;
+  has_skool: boolean;
+  has_whop: boolean;
   promoting_prop_firms: boolean;
   prop_firms_mentioned: string[];
   instagram_url: string | null;
   linkedin_url: string | null;
+  youtube_url: string | null;
+  x_url: string | null;
+  link_in_bio_url: string | null;
+  course_url: string | null;
+  discord_url: string | null;
+  telegram_url: string | null;
+  niche: string | null;
+  primary_platform: string | null;
+  source_type: string | null;
+  source_url: string | null;
   lead_score: number;
   confidence_score: number;
   notes: string | null;
@@ -87,7 +99,6 @@ export interface Outreach {
   updated_at: string;
 }
 
-// Extended types for UI
 export interface CreatorWithAccounts extends Creator {
   accounts: CreatorAccount[];
 }
@@ -114,12 +125,16 @@ export interface CreatorFilters {
   has_course?: boolean;
   has_discord?: boolean;
   has_telegram?: boolean;
+  has_skool?: boolean;
+  has_whop?: boolean;
   promoting_prop_firms?: boolean;
   has_instagram?: boolean;
   has_linkedin?: boolean;
+  has_website?: boolean;
+  high_confidence?: boolean;
   new_today?: boolean;
   status?: CreatorStatus;
   search?: string;
-  sort_by?: 'lead_score' | 'followers' | 'created_at' | 'first_seen_at' | 'name';
+  sort_by?: 'lead_score' | 'followers' | 'created_at' | 'first_seen_at' | 'confidence_score' | 'name';
   sort_order?: 'asc' | 'desc';
 }
