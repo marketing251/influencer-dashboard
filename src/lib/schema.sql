@@ -21,6 +21,8 @@ CREATE TABLE creators (
   confidence_score REAL DEFAULT 0,
   notes TEXT,
   status TEXT DEFAULT 'new' CHECK (status IN ('new', 'contacted', 'replied', 'qualified', 'rejected', 'converted')),
+  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -91,9 +93,21 @@ CREATE TABLE outreach (
 -- Indexes
 CREATE INDEX idx_creators_lead_score ON creators(lead_score DESC);
 CREATE INDEX idx_creators_status ON creators(status);
+CREATE INDEX idx_creators_first_seen ON creators(first_seen_at DESC);
+CREATE INDEX idx_creators_last_seen ON creators(last_seen_at DESC);
 CREATE INDEX idx_creator_accounts_platform ON creator_accounts(platform);
 CREATE INDEX idx_creator_accounts_creator ON creator_accounts(creator_id);
+CREATE INDEX idx_creator_accounts_platform_id ON creator_accounts(platform, platform_id);
 CREATE INDEX idx_creator_posts_creator ON creator_posts(creator_id);
+CREATE INDEX idx_creator_posts_url ON creator_posts(post_url);
 CREATE INDEX idx_daily_discoveries_date ON daily_discoveries(run_date DESC);
 CREATE INDEX idx_outreach_creator ON outreach(creator_id);
 CREATE INDEX idx_outreach_status ON outreach(status);
+
+-- Migration helper: add columns to existing table if upgrading
+-- ALTER TABLE creators ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ DEFAULT NOW();
+-- ALTER TABLE creators ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();
+-- CREATE INDEX IF NOT EXISTS idx_creators_first_seen ON creators(first_seen_at DESC);
+-- CREATE INDEX IF NOT EXISTS idx_creators_last_seen ON creators(last_seen_at DESC);
+-- CREATE INDEX IF NOT EXISTS idx_creator_accounts_platform_id ON creator_accounts(platform, platform_id);
+-- CREATE INDEX IF NOT EXISTS idx_creator_posts_url ON creator_posts(post_url);

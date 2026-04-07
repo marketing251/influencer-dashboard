@@ -1,6 +1,16 @@
 /**
  * Pipeline utilities for normalizing and upserting creator data.
  * Central place for DB writes so discovery routes stay focused on fetching.
+ *
+ * Dedup rules:
+ * 1. Primary key: (platform, platform_id) on creator_accounts — same platform account is never duplicated
+ * 2. Slug + name match: same slug AND same name → link new platform account to existing creator
+ * 3. Slug collision, different name → append platform to slug to avoid overwrite
+ * 4. Post dedup: by post_url — same post URL is never duplicated, metrics are updated
+ *
+ * Timestamp rules:
+ * - first_seen_at: set once on creation, never updated
+ * - last_seen_at: updated on every discovery run that touches this creator
  */
 
 import { isSupabaseConfigured, supabaseAdmin } from './db';
@@ -8,6 +18,24 @@ import { computeLeadScore, computeConfidenceScore } from './scoring';
 import { detectPropFirmsFromSources } from './prop-firms';
 import { log } from './logger';
 import type { Platform } from './types';
+
+// ─── Text analysis helpers ──────────────────────────────────────────
+
+const COURSE_PATTERN = /\b(?:course|mentor(?:ship)?|academy|learn|enroll|program|masterclass|bootcamp|curriculum|coaching|training|workshop|certification)\b/i;
+const DISCORD_PATTERN = /discord\.(?:gg|com\/invite)\//i;
+const TELEGRAM_PATTERN = /t\.me\//i;
+
+function analyzeText(texts: (string | null | undefined)[]) {
+  const combined = texts.filter(Boolean).join(' ');
+  return {
+    propFirms: detectPropFirmsFromSources(...texts),
+    hasCourse: COURSE_PATTERN.test(combined),
+    hasDiscord: DISCORD_PATTERN.test(combined),
+    hasTelegram: TELEGRAM_PATTERN.test(combined),
+  };
+}
+
+// ─── Public types ───────────────────────────────────────────────────
 
 /** Shape returned by discovery integrations. */
 export interface DiscoveredCreator {
@@ -45,6 +73,8 @@ export interface UpsertResult {
   error?: string;
 }
 
+// ─── Core upsert ────────────────────────────────────────────────────
+
 /**
  * Upsert a discovered creator + account into the database.
  * Returns what happened: created, updated, or error.
@@ -60,7 +90,7 @@ export async function upsertCreator(
   const now = new Date().toISOString();
 
   try {
-    // Check if this platform account already exists
+    // ── Dedup check: does this platform+platform_id already exist? ──
     const { data: existing } = await supabaseAdmin
       .from('creator_accounts')
       .select('creator_id, id')
@@ -68,162 +98,120 @@ export async function upsertCreator(
       .eq('platform_id', data.account.platform_id)
       .maybeSingle();
 
-    // Merge prop firm detection from all text sources
-    const allText = [data.bio, data.account.bio, ...(posts ?? []).map(p => `${p.title ?? ''} ${p.content_snippet ?? ''}`)];
-    const propFirms = detectPropFirmsFromSources(...allText);
-    const hasCourse = /course|mentor|academy|learn|enroll|program|masterclass|bootcamp|curriculum/i.test(allText.join(' '));
-    const hasDiscord = /discord\.gg|discord\.com\/invite/i.test(allText.join(' '));
-    const hasTelegram = /t\.me\//i.test(allText.join(' '));
+    // Analyze all text sources for signals
+    const postTexts = (posts ?? []).map(p => `${p.title ?? ''} ${p.content_snippet ?? ''}`);
+    const signals = analyzeText([data.bio, data.account.bio, ...postTexts]);
 
     if (existing) {
-      // --- UPDATE existing creator ---
-      const creatorId = existing.creator_id;
-
-      // Fetch current creator to merge, not overwrite
-      const { data: current } = await supabaseAdmin
-        .from('creators')
-        .select('*')
-        .eq('id', creatorId)
-        .single();
-
-      if (!current) {
-        return { action: 'skipped', creator_id: creatorId, name: data.name, error: 'Creator record missing' };
-      }
-
-      // Merge prop firms (union of existing + new)
-      const mergedFirms = [...new Set([...(current.prop_firms_mentioned ?? []), ...propFirms])];
-
-      // Recalculate total followers: fetch all accounts for this creator
-      const { data: allAccounts } = await supabaseAdmin
-        .from('creator_accounts')
-        .select('followers, platform, verified')
-        .eq('creator_id', creatorId);
-
-      // Update the account that matched
-      const updatedFollowers = data.account.followers;
-      const accountsForScoring = (allAccounts ?? []).map(a =>
-        a.platform === data.account.platform ? { ...a, followers: updatedFollowers } : a,
-      );
-      const totalFollowers = accountsForScoring.reduce((sum, a) => sum + (a.followers ?? 0), 0);
-
-      const updatedCreator = {
-        ...current,
-        total_followers: totalFollowers,
-        has_course: current.has_course || hasCourse,
-        has_discord: current.has_discord || hasDiscord,
-        has_telegram: current.has_telegram || hasTelegram,
-        promoting_prop_firms: current.promoting_prop_firms || mergedFirms.length > 0,
-        prop_firms_mentioned: mergedFirms,
-        website: current.website || data.website || null,
-      };
-
-      const leadScore = computeLeadScore({ creator: updatedCreator, accounts: accountsForScoring });
-      const confidenceScore = computeConfidenceScore({ creator: updatedCreator, accounts: accountsForScoring });
-
-      await supabaseAdmin.from('creators').update({
-        total_followers: totalFollowers,
-        has_course: updatedCreator.has_course,
-        has_discord: updatedCreator.has_discord,
-        has_telegram: updatedCreator.has_telegram,
-        promoting_prop_firms: updatedCreator.promoting_prop_firms,
-        prop_firms_mentioned: mergedFirms,
-        website: updatedCreator.website,
-        lead_score: leadScore,
-        confidence_score: confidenceScore,
-        updated_at: now,
-      }).eq('id', creatorId);
-
-      // Update account
-      await supabaseAdmin.from('creator_accounts').update({
-        followers: data.account.followers,
-        bio: data.account.bio,
-        verified: data.account.verified,
-        last_scraped_at: now,
-        updated_at: now,
-      }).eq('id', existing.id);
-
-      // Upsert posts
-      if (posts?.length) {
-        await upsertPosts(creatorId, existing.id, data.account.platform, posts);
-      }
-
-      log.info('pipeline.upsertCreator: updated', { name: data.name, creator_id: creatorId, platform: data.account.platform });
-      return { action: 'updated', creator_id: creatorId, name: data.name };
-
+      return await updateExistingCreator(existing, data, posts, signals, now);
     } else {
-      // --- CREATE new creator ---
+      return await createNewCreator(data, posts, signals, now);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error('pipeline.upsertCreator: exception', { name: data.name, error: msg });
+    return { action: 'skipped', creator_id: null, name: data.name, error: msg };
+  }
+}
 
-      // Check for slug collision
-      let slug = data.slug;
-      const { data: slugCheck } = await supabaseAdmin
-        .from('creators')
-        .select('id')
-        .eq('slug', slug)
-        .maybeSingle();
+// ─── Update path ────────────────────────────────────────────────────
 
-      if (slugCheck) {
-        // Check if this is the same person (different platform)
-        // by checking if they have similar name
-        const { data: existingCreator } = await supabaseAdmin
-          .from('creators')
-          .select('id, name')
-          .eq('slug', slug)
-          .single();
+async function updateExistingCreator(
+  existing: { creator_id: string; id: string },
+  data: DiscoveredCreator,
+  posts: DiscoveredPost[] | undefined,
+  signals: ReturnType<typeof analyzeText>,
+  now: string,
+): Promise<UpsertResult> {
+  const creatorId = existing.creator_id;
 
-        if (existingCreator && existingCreator.name.toLowerCase() === data.name.toLowerCase()) {
-          // Same person, different platform — add account to existing creator
-          const creatorId = existingCreator.id;
-          await supabaseAdmin.from('creator_accounts').insert({
-            creator_id: creatorId,
-            platform: data.account.platform,
-            handle: data.account.handle,
-            profile_url: data.account.profile_url,
-            followers: data.account.followers,
-            platform_id: data.account.platform_id,
-            bio: data.account.bio,
-            verified: data.account.verified,
-            last_scraped_at: now,
-          });
+  // Fetch current creator to merge (never overwrite good data)
+  const { data: current } = await supabaseAdmin
+    .from('creators')
+    .select('*')
+    .eq('id', creatorId)
+    .single();
 
-          log.info('pipeline.upsertCreator: linked account to existing creator', {
-            name: data.name, creator_id: creatorId, platform: data.account.platform,
-          });
-          return { action: 'updated', creator_id: creatorId, name: data.name };
-        }
+  if (!current) {
+    return { action: 'skipped', creator_id: creatorId, name: data.name, error: 'Creator record missing' };
+  }
 
-        // Different person, append platform to slug
-        slug = `${slug}-${data.account.platform}`;
-      }
+  // Merge prop firms (union of existing + new)
+  const mergedFirms = [...new Set([...(current.prop_firms_mentioned ?? []), ...signals.propFirms])];
 
-      const creatorData = {
-        name: data.name,
-        slug,
-        website: data.website || null,
-        total_followers: data.account.followers,
-        has_course: hasCourse,
-        has_discord: hasDiscord,
-        has_telegram: hasTelegram,
-        promoting_prop_firms: propFirms.length > 0,
-        prop_firms_mentioned: propFirms,
-        lead_score: 0,
-        confidence_score: 0,
-      };
+  // Recalculate total followers across all accounts
+  const { data: allAccounts } = await supabaseAdmin
+    .from('creator_accounts')
+    .select('followers, platform, verified')
+    .eq('creator_id', creatorId);
 
-      const leadScore = computeLeadScore({ creator: creatorData, accounts: [data.account] });
-      const confidenceScore = computeConfidenceScore({ creator: creatorData, accounts: [data.account] });
+  const accountsForScoring = (allAccounts ?? []).map(a =>
+    a.platform === data.account.platform ? { ...a, followers: data.account.followers } : a,
+  );
+  const totalFollowers = accountsForScoring.reduce((sum, a) => sum + (a.followers ?? 0), 0);
 
-      const { data: newCreator, error: insertErr } = await supabaseAdmin
-        .from('creators')
-        .insert({ ...creatorData, lead_score: leadScore, confidence_score: confidenceScore })
-        .select('id')
-        .single();
+  // Merge: booleans only upgrade (false→true), never downgrade
+  const merged = {
+    total_followers: totalFollowers,
+    has_course: current.has_course || signals.hasCourse,
+    has_discord: current.has_discord || signals.hasDiscord,
+    has_telegram: current.has_telegram || signals.hasTelegram,
+    promoting_prop_firms: current.promoting_prop_firms || mergedFirms.length > 0,
+    prop_firms_mentioned: mergedFirms,
+    website: current.website || data.website || null,
+  };
 
-      if (insertErr || !newCreator) {
-        return { action: 'skipped', creator_id: null, name: data.name, error: insertErr?.message ?? 'Insert failed' };
-      }
+  const leadScore = computeLeadScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
+  const confidenceScore = computeConfidenceScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
 
+  await supabaseAdmin.from('creators').update({
+    ...merged,
+    lead_score: leadScore,
+    confidence_score: confidenceScore,
+    last_seen_at: now,
+    updated_at: now,
+  }).eq('id', creatorId);
+
+  // Update the matched account
+  await supabaseAdmin.from('creator_accounts').update({
+    followers: data.account.followers,
+    bio: data.account.bio,
+    verified: data.account.verified,
+    last_scraped_at: now,
+    updated_at: now,
+  }).eq('id', existing.id);
+
+  // Upsert posts
+  if (posts?.length) {
+    await upsertPosts(creatorId, existing.id, data.account.platform, posts);
+  }
+
+  log.info('pipeline.upsert: updated', { name: data.name, creator_id: creatorId, platform: data.account.platform });
+  return { action: 'updated', creator_id: creatorId, name: data.name };
+}
+
+// ─── Create path ────────────────────────────────────────────────────
+
+async function createNewCreator(
+  data: DiscoveredCreator,
+  posts: DiscoveredPost[] | undefined,
+  signals: ReturnType<typeof analyzeText>,
+  now: string,
+): Promise<UpsertResult> {
+  // ── Slug dedup: check for collision ──
+  let slug = data.slug;
+  const { data: slugOwner } = await supabaseAdmin
+    .from('creators')
+    .select('id, name')
+    .eq('slug', slug)
+    .maybeSingle();
+
+  if (slugOwner) {
+    if (slugOwner.name.toLowerCase() === data.name.toLowerCase()) {
+      // Same person on different platform → link account to existing creator
+      const creatorId = slugOwner.id;
       await supabaseAdmin.from('creator_accounts').insert({
-        creator_id: newCreator.id,
+        creator_id: creatorId,
         platform: data.account.platform,
         handle: data.account.handle,
         profile_url: data.account.profile_url,
@@ -234,22 +222,76 @@ export async function upsertCreator(
         last_scraped_at: now,
       });
 
-      if (posts?.length) {
-        await upsertPosts(newCreator.id, null, data.account.platform, posts);
-      }
+      // Bump last_seen_at on the existing creator
+      await supabaseAdmin.from('creators').update({
+        last_seen_at: now,
+        updated_at: now,
+      }).eq('id', creatorId);
 
-      log.info('pipeline.upsertCreator: created', { name: data.name, creator_id: newCreator.id, platform: data.account.platform });
-      return { action: 'created', creator_id: newCreator.id, name: data.name };
+      log.info('pipeline.upsert: linked account to existing creator', {
+        name: data.name, creator_id: creatorId, platform: data.account.platform,
+      });
+      return { action: 'updated', creator_id: creatorId, name: data.name };
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error('pipeline.upsertCreator: exception', { name: data.name, error: msg });
-    return { action: 'skipped', creator_id: null, name: data.name, error: msg };
+
+    // Different person → disambiguate slug
+    slug = `${slug}-${data.account.platform}`;
   }
+
+  // Build creator record
+  const creatorData = {
+    name: data.name,
+    slug,
+    website: data.website || null,
+    total_followers: data.account.followers,
+    has_course: signals.hasCourse,
+    has_discord: signals.hasDiscord,
+    has_telegram: signals.hasTelegram,
+    promoting_prop_firms: signals.propFirms.length > 0,
+    prop_firms_mentioned: signals.propFirms,
+    lead_score: 0,
+    confidence_score: 0,
+    first_seen_at: now,
+    last_seen_at: now,
+  };
+
+  const leadScore = computeLeadScore({ creator: creatorData, accounts: [data.account] });
+  const confidenceScore = computeConfidenceScore({ creator: creatorData, accounts: [data.account] });
+
+  const { data: newCreator, error: insertErr } = await supabaseAdmin
+    .from('creators')
+    .insert({ ...creatorData, lead_score: leadScore, confidence_score: confidenceScore })
+    .select('id')
+    .single();
+
+  if (insertErr || !newCreator) {
+    return { action: 'skipped', creator_id: null, name: data.name, error: insertErr?.message ?? 'Insert failed' };
+  }
+
+  await supabaseAdmin.from('creator_accounts').insert({
+    creator_id: newCreator.id,
+    platform: data.account.platform,
+    handle: data.account.handle,
+    profile_url: data.account.profile_url,
+    followers: data.account.followers,
+    platform_id: data.account.platform_id,
+    bio: data.account.bio,
+    verified: data.account.verified,
+    last_scraped_at: now,
+  });
+
+  if (posts?.length) {
+    await upsertPosts(newCreator.id, null, data.account.platform, posts);
+  }
+
+  log.info('pipeline.upsert: created', { name: data.name, creator_id: newCreator.id, platform: data.account.platform });
+  return { action: 'created', creator_id: newCreator.id, name: data.name };
 }
 
+// ─── Post upsert ────────────────────────────────────────────────────
+
 /**
- * Upsert posts — skip duplicates by post_url.
+ * Upsert posts — dedup by post_url, update metrics on existing.
  */
 async function upsertPosts(
   creatorId: string,
@@ -266,15 +308,15 @@ async function upsertPosts(
       .eq('post_url', post.post_url)
       .maybeSingle();
 
+    const text = `${post.title ?? ''} ${post.content_snippet ?? ''}`;
+
     if (existing) {
-      // Update metrics
       await supabaseAdmin.from('creator_posts').update({
         views: post.views,
         likes: post.likes,
         comments: post.comments,
       }).eq('id', existing.id);
     } else {
-      const text = `${post.title ?? ''} ${post.content_snippet ?? ''}`;
       await supabaseAdmin.from('creator_posts').insert({
         creator_id: creatorId,
         account_id: accountId,
@@ -287,11 +329,13 @@ async function upsertPosts(
         comments: post.comments,
         published_at: post.published_at,
         mentions_prop_firm: detectPropFirmsFromSources(text).length > 0,
-        mentions_course: /course|mentor|academy|learn|enroll|program/i.test(text),
+        mentions_course: COURSE_PATTERN.test(text),
       });
     }
   }
 }
+
+// ─── Discovery logging ──────────────────────────────────────────────
 
 /**
  * Log a daily discovery run in the daily_discoveries table.

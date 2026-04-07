@@ -4,12 +4,16 @@ import { discoverXCreators } from '@/lib/integrations/x';
 import { upsertCreator, logDiscoveryRun } from '@/lib/pipeline';
 import { withLogging, log } from '@/lib/logger';
 
-export const maxDuration = 60; // Vercel function timeout (seconds)
+export const maxDuration = 60;
 
+/**
+ * Standalone X discovery endpoint.
+ * Also called internally by discoverLeads() via the shared pipeline.
+ */
 export async function POST() {
   if (!process.env.X_BEARER_TOKEN) {
     return NextResponse.json(
-      { error: 'X_BEARER_TOKEN not configured. Set it in environment variables.' },
+      { error: 'X_BEARER_TOKEN not configured' },
       { status: 400 },
     );
   }
@@ -28,7 +32,6 @@ export async function POST() {
     return NextResponse.json({ error: discoverError }, { status: 500 });
   }
 
-  // Upsert each discovered creator
   let newCount = 0;
   let updatedCount = 0;
   const errors: string[] = [];
@@ -40,7 +43,6 @@ export async function POST() {
     if (result.error) errors.push(`${result.name}: ${result.error}`);
   }
 
-  // Log discovery run
   const status = errors.length > discoveries.length / 2 ? 'failed' : 'completed';
   await logDiscoveryRun('x', newCount, updatedCount, errors, status as 'completed' | 'failed');
 
@@ -52,7 +54,7 @@ export async function POST() {
     skipped: discoveries.length - newCount - updatedCount,
     errors: errors.length,
     error_details: errors.slice(0, 10),
-    database: isSupabaseConfigured() ? 'connected' : 'mock (no database)',
+    database: isSupabaseConfigured() ? 'connected' : 'not configured',
     durationMs,
   };
 

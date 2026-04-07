@@ -4,12 +4,16 @@ import { discoverYouTubeCreators } from '@/lib/integrations/youtube';
 import { upsertCreator, logDiscoveryRun } from '@/lib/pipeline';
 import { withLogging, log } from '@/lib/logger';
 
-export const maxDuration = 60; // Vercel function timeout (seconds)
+export const maxDuration = 60;
 
+/**
+ * Standalone YouTube discovery endpoint.
+ * Also called internally by discoverLeads() via the shared pipeline.
+ */
 export async function POST() {
   if (!process.env.YOUTUBE_API_KEY) {
     return NextResponse.json(
-      { error: 'YOUTUBE_API_KEY not configured. Set it in environment variables.' },
+      { error: 'YOUTUBE_API_KEY not configured' },
       { status: 400 },
     );
   }
@@ -29,7 +33,6 @@ export async function POST() {
     return NextResponse.json({ error: discoverError }, { status: 500 });
   }
 
-  // Upsert each discovered creator
   let newCount = 0;
   let updatedCount = 0;
   const errors: string[] = [];
@@ -41,7 +44,6 @@ export async function POST() {
     if (result.error) errors.push(`${result.name}: ${result.error}`);
   }
 
-  // Log discovery run
   const status = errors.length > discoveries.length / 2 ? 'failed' : 'completed';
   await logDiscoveryRun('youtube', newCount, updatedCount, errors, status as 'completed' | 'failed');
 
@@ -52,8 +54,8 @@ export async function POST() {
     updated: updatedCount,
     skipped: discoveries.length - newCount - updatedCount,
     errors: errors.length,
-    error_details: errors.slice(0, 10), // cap error details in response
-    database: isSupabaseConfigured() ? 'connected' : 'mock (no database)',
+    error_details: errors.slice(0, 10),
+    database: isSupabaseConfigured() ? 'connected' : 'not configured',
     durationMs,
   };
 

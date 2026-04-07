@@ -21,6 +21,8 @@ export interface Creator {
   confidence_score: number;
   notes: string | null;
   status: CreatorStatus;
+  first_seen_at: string;
+  last_seen_at: string;
   created_at: string;
   updated_at: string;
 }
@@ -113,6 +115,6 @@ export interface CreatorFilters {
   promoting_prop_firms?: boolean;
   status?: CreatorStatus;
   search?: string;
-  sort_by?: 'lead_score' | 'followers' | 'created_at' | 'name';
+  sort_by?: 'lead_score' | 'followers' | 'created_at' | 'first_seen_at' | 'name';
   sort_order?: 'asc' | 'desc';
 }

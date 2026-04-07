@@ -13,7 +13,7 @@ async function fetchStats(): Promise<DashboardStats> {
   if (!isSupabaseConfigured()) return empty;
 
   const [creatorsRes, outreachRes, accountsRes] = await Promise.all([
-    supabase.from('creators').select('id, public_email, lead_score, created_at'),
+    supabase.from('creators').select('id, public_email, lead_score, first_seen_at, created_at'),
     supabase.from('outreach').select('id, status'),
     supabase.from('creator_accounts').select('platform'),
   ]);
@@ -30,7 +30,7 @@ async function fetchStats(): Promise<DashboardStats> {
 
   return {
     total_creators: creators.length,
-    new_today: creators.filter(c => c.created_at?.startsWith(today)).length,
+    new_today: creators.filter(c => (c.first_seen_at ?? c.created_at)?.startsWith(today)).length,
     total_with_email: creators.filter(c => c.public_email).length,
     avg_lead_score: creators.length
       ? Math.round(creators.reduce((s, c) => s + (c.lead_score ?? 0), 0) / creators.length)
