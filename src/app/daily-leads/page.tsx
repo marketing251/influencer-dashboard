@@ -5,6 +5,7 @@ import { useEffect, useState, Suspense } from 'react';
 import { Filters } from '@/components/filters';
 import { CreatorCard } from '@/components/creator-card';
 import { CreatorTable } from '@/components/creator-table';
+import { ExportMenu } from '@/components/export-menu';
 import type { Creator, CreatorAccount } from '@/lib/types';
 
 type CreatorWithAccounts = Creator & { accounts: CreatorAccount[] };
@@ -35,19 +36,22 @@ function DailyLeadsContent() {
             {creators.length} creator{creators.length !== 1 ? 's' : ''} found
           </p>
         </div>
-        <div className="flex gap-1">
-          <button
-            onClick={() => setView('grid')}
-            className={`rounded-md px-3 py-1.5 text-sm ${view === 'grid' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}
-          >
-            Grid
-          </button>
-          <button
-            onClick={() => setView('table')}
-            className={`rounded-md px-3 py-1.5 text-sm ${view === 'table' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}
-          >
-            Table
-          </button>
+        <div className="flex items-center gap-3">
+          <ExportMenu creators={creators} />
+          <div className="flex gap-1">
+            <button
+              onClick={() => setView('grid')}
+              className={`rounded-md px-3 py-1.5 text-sm ${view === 'grid' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}
+            >
+              Grid
+            </button>
+            <button
+              onClick={() => setView('table')}
+              className={`rounded-md px-3 py-1.5 text-sm ${view === 'table' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}
+            >
+              Table
+            </button>
+          </div>
         </div>
       </div>
 

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "InfluencerHQ - Trading Creator Discovery",
+  title: "Influencer Outreach HQ - Trading Creator Discovery",
   description: "Discover and manage outreach to trading influencers and educators",
 };
 

@@ -17,7 +17,7 @@ export function Nav() {
     <nav className="border-b border-zinc-800 bg-zinc-950">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
         <Link href="/" className="text-lg font-bold text-white">
-          InfluencerHQ
+          Influencer Outreach HQ
         </Link>
         <div className="flex gap-1">
           {links.map(link => (
