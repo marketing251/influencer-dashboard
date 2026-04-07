@@ -22,6 +22,7 @@ const platformIcons: Record<string, string> = {
   discord: 'DC',
   telegram: 'TG',
   twitch: 'TW',
+  linkedin: 'LI',
 };
 
 function formatFollowers(n: number) {

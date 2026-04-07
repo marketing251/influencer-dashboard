@@ -1,5 +1,5 @@
 export type CreatorStatus = 'new' | 'contacted' | 'replied' | 'qualified' | 'rejected' | 'converted';
-export type Platform = 'youtube' | 'x' | 'instagram' | 'tiktok' | 'twitch' | 'discord' | 'telegram';
+export type Platform = 'youtube' | 'x' | 'instagram' | 'tiktok' | 'twitch' | 'discord' | 'telegram' | 'linkedin';
 export type OutreachChannel = 'email' | 'dm' | 'form' | 'other';
 export type OutreachStatus = 'draft' | 'queued' | 'sent' | 'opened' | 'replied' | 'bounced';
 export type DiscoveryStatus = 'running' | 'completed' | 'failed';

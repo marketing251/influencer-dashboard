@@ -31,7 +31,7 @@ CREATE TABLE creators (
 CREATE TABLE creator_accounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-  platform TEXT NOT NULL CHECK (platform IN ('youtube', 'x', 'instagram', 'tiktok', 'twitch', 'discord', 'telegram')),
+  platform TEXT NOT NULL CHECK (platform IN ('youtube', 'x', 'instagram', 'tiktok', 'twitch', 'discord', 'telegram', 'linkedin')),
   handle TEXT NOT NULL,
   profile_url TEXT,
   followers BIGINT DEFAULT 0,

@@ -2,27 +2,32 @@
  * Shared discovery pipeline used by both the scheduled daily refresh
  * and the manual "Refresh Leads" button.
  *
- * Runs YouTube + X discovery in parallel, then enriches creators
- * that have a website but no email.
+ * Uses the provider registry to run all configured API providers in parallel,
+ * then runs website enrichment on creators that have a website but no email.
  */
 
 import { isSupabaseConfigured, supabaseAdmin } from './db';
 import { enrichFromWebsite } from './integrations/website-enrichment';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
-import { discoverYouTubeCreators } from './integrations/youtube';
-import { discoverXCreators } from './integrations/x';
 import { upsertCreator, logDiscoveryRun } from './pipeline';
 import { withLogging, log } from './logger';
+import { getApiProviders } from './discovery/registry';
+import type { DiscoveryProvider } from './discovery/provider';
+import type { Platform } from './types';
+
+// ─── Result types ───────────────────────────────────────────────────
 
 export interface DiscoverLeadsResult {
   started_at: string;
   completed_at: string;
+  platforms: Record<string, PlatformResult>;
+  enrichment: { attempted: number; enriched: number; errors: number };
+  /** Legacy accessors so existing UI code doesn't break. */
   youtube: PlatformResult;
   x: PlatformResult;
-  enrichment: { attempted: number; enriched: number; errors: number };
 }
 
-interface PlatformResult {
+export interface PlatformResult {
   discovered: number;
   new: number;
   updated: number;
@@ -36,17 +41,20 @@ function skippedResult(reason: string): PlatformResult {
   return { discovered: 0, new: 0, updated: 0, skipped: 0, errors: 0, error_details: [], skippedReason: reason };
 }
 
-async function runPlatformDiscovery(
-  platform: 'youtube' | 'x',
-  fetchFn: () => Promise<{ creator: Parameters<typeof upsertCreator>[0]; posts: Parameters<typeof upsertCreator>[1] }[]>,
-): Promise<PlatformResult> {
+// ─── Per-provider execution ─────────────────────────────────────────
+
+async function runProvider(provider: DiscoveryProvider): Promise<PlatformResult> {
+  if (!provider.isConfigured()) {
+    return skippedResult(provider.configHint());
+  }
+
   const { result: discoveries, error: fetchError } = await withLogging(
-    `discoverLeads.${platform}`,
-    fetchFn,
+    `discoverLeads.${provider.platform}`,
+    () => provider.discover(),
   );
 
   if (fetchError || !discoveries) {
-    await logDiscoveryRun(platform, 0, 0, [fetchError ?? 'Unknown error'], 'failed');
+    await logDiscoveryRun(provider.platform as Platform, 0, 0, [fetchError ?? 'Unknown error'], 'failed');
     return { discovered: 0, new: 0, updated: 0, skipped: 0, errors: 1, error_details: [fetchError ?? 'Unknown error'] };
   }
 
@@ -62,7 +70,7 @@ async function runPlatformDiscovery(
   }
 
   const status = errors.length > discoveries.length / 2 ? 'failed' : 'completed';
-  await logDiscoveryRun(platform, newCount, updatedCount, errors, status as 'completed' | 'failed');
+  await logDiscoveryRun(provider.platform as Platform, newCount, updatedCount, errors, status);
 
   return {
     discovered: discoveries.length,
@@ -73,6 +81,8 @@ async function runPlatformDiscovery(
     error_details: errors.slice(0, 10),
   };
 }
+
+// ─── Website enrichment ─────────────────────────────────────────────
 
 async function runEnrichment(): Promise<{ attempted: number; enriched: number; errors: number }> {
   const stats = { attempted: 0, enriched: 0, errors: 0 };
@@ -104,10 +114,7 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
         if (enrichment.prop_firms_mentioned.length > 0) {
           updates.promoting_prop_firms = true;
           const { data: existing } = await supabaseAdmin
-            .from('creators')
-            .select('prop_firms_mentioned')
-            .eq('id', creator.id)
-            .single();
+            .from('creators').select('prop_firms_mentioned').eq('id', creator.id).single();
           updates.prop_firms_mentioned = [
             ...new Set([...(existing?.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned]),
           ];
@@ -116,7 +123,8 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
         await supabaseAdmin.from('creators').update(updates).eq('id', creator.id);
 
         const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', creator.id).single();
-        const { data: accounts } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);
+        const { data: accounts } = await supabaseAdmin
+          .from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);
 
         if (full) {
           const leadScore = computeLeadScore({ creator: full, accounts: accounts ?? [] });
@@ -135,26 +143,31 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
   return stats;
 }
 
+// ─── Main orchestrator ──────────────────────────────────────────────
+
 /**
- * Run the full discovery pipeline: YouTube + X in parallel, then enrichment.
+ * Run the full discovery pipeline:
+ * 1. All configured API providers in parallel
+ * 2. Website enrichment for creators missing email
  */
 export async function discoverLeads(): Promise<DiscoverLeadsResult> {
   const startedAt = new Date().toISOString();
   log.info('discoverLeads: started');
 
-  // Run platform discoveries in parallel
-  const [youtube, x] = await Promise.all([
-    process.env.YOUTUBE_API_KEY
-      ? runPlatformDiscovery('youtube', () =>
-          discoverYouTubeCreators({ maxPerQuery: 5, minSubscribers: 1_000, fetchVideosAbove: 10_000, maxVideoFetches: 10 }),
-        )
-      : Promise.resolve(skippedResult('YOUTUBE_API_KEY not set')),
-    process.env.X_BEARER_TOKEN
-      ? runPlatformDiscovery('x', () =>
-          discoverXCreators({ maxPerQuery: 20, minFollowers: 1_000, delayMs: 2_000 }),
-        )
-      : Promise.resolve(skippedResult('X_BEARER_TOKEN not set')),
-  ]);
+  // Run all API providers in parallel
+  const apiProviders = getApiProviders();
+  const platformResults: Record<string, PlatformResult> = {};
+
+  const results = await Promise.all(
+    apiProviders.map(async provider => {
+      const result = await runProvider(provider);
+      return { platform: provider.platform, result };
+    }),
+  );
+
+  for (const { platform, result } of results) {
+    platformResults[platform] = result;
+  }
 
   // Run enrichment
   const { result: enrichment } = await withLogging('discoverLeads.enrichment', runEnrichment);
@@ -162,15 +175,19 @@ export async function discoverLeads(): Promise<DiscoverLeadsResult> {
   const completedAt = new Date().toISOString();
 
   log.info('discoverLeads: completed', {
-    youtube_new: youtube.new, x_new: x.new,
+    platforms: Object.fromEntries(
+      Object.entries(platformResults).map(([k, v]) => [k, { new: v.new, updated: v.updated }]),
+    ),
     enriched: enrichment?.enriched ?? 0,
   });
 
   return {
     started_at: startedAt,
     completed_at: completedAt,
-    youtube,
-    x,
+    platforms: platformResults,
     enrichment: enrichment ?? { attempted: 0, enriched: 0, errors: 0 },
+    // Legacy accessors for existing UI
+    youtube: platformResults['youtube'] ?? skippedResult('YouTube provider not registered'),
+    x: platformResults['x'] ?? skippedResult('X provider not registered'),
   };
 }

@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback } from 'react';
 
-const platforms = ['all', 'youtube', 'x', 'instagram', 'tiktok', 'discord', 'telegram'] as const;
+const platforms = ['all', 'youtube', 'x', 'instagram', 'linkedin', 'tiktok', 'discord', 'telegram'] as const;
 const sortOptions = [
   { value: 'lead_score', label: 'Lead Score' },
   { value: 'followers', label: 'Followers' },
