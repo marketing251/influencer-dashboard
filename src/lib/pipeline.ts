@@ -79,12 +79,49 @@ export async function upsertCreator(
   const now = new Date().toISOString();
 
   try {
-    const { data: existing } = await supabaseAdmin
+    // Dedup check 1: exact (platform, platform_id) match
+    let existing = (await supabaseAdmin
       .from('creator_accounts')
       .select('creator_id, id')
       .eq('platform', data.account.platform)
       .eq('platform_id', data.account.platform_id)
-      .maybeSingle();
+      .maybeSingle()).data;
+
+    // Dedup check 2: same platform + normalized handle (catches format differences)
+    if (!existing) {
+      const normalHandle = data.account.handle.toLowerCase().replace(/^@/, '');
+      existing = (await supabaseAdmin
+        .from('creator_accounts')
+        .select('creator_id, id')
+        .eq('platform', data.account.platform)
+        .ilike('handle', normalHandle)
+        .maybeSingle()).data;
+    }
+
+    // Dedup check 3: same website domain → same creator (cross-platform unification)
+    if (!existing && data.website) {
+      try {
+        const domain = new URL(data.website).hostname.replace(/^www\./, '');
+        const { data: websiteMatch } = await supabaseAdmin
+          .from('creators')
+          .select('id')
+          .ilike('website', `%${domain}%`)
+          .maybeSingle();
+        if (websiteMatch) {
+          // Link this account to the existing creator
+          const creatorId = websiteMatch.id;
+          const { data: accountCheck } = await supabaseAdmin
+            .from('creator_accounts')
+            .select('id')
+            .eq('creator_id', creatorId)
+            .eq('platform', data.account.platform)
+            .maybeSingle();
+          if (accountCheck) {
+            existing = { creator_id: creatorId, id: accountCheck.id };
+          }
+        }
+      } catch { /* invalid URL, skip domain dedup */ }
+    }
 
     const postTexts = (posts ?? []).map(p => `${p.title ?? ''} ${p.content_snippet ?? ''}`);
     const signals = analyzeText([data.bio, data.account.bio, ...postTexts]);
@@ -157,6 +194,8 @@ async function updateExistingCreator(
     telegram_url: mergeUrl(current.telegram_url, signals.telegram_url),
     link_in_bio_url: mergeUrl(current.link_in_bio_url, signals.link_in_bio_url),
     course_url: mergeUrl(current.course_url, signals.course_url),
+    source_type: current.source_type || data.source_type || null,
+    source_url: current.source_url || data.source_url || null,
   };
 
   const leadScore = computeLeadScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
@@ -234,6 +273,7 @@ async function createNewCreator(
     telegram_url: signals.telegram_url,
     link_in_bio_url: signals.link_in_bio_url,
     course_url: signals.course_url,
+    primary_platform: data.account.platform,
     source_type: data.source_type || null,
     source_url: data.source_url || null,
     lead_score: 0,

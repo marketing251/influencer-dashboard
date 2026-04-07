@@ -40,8 +40,11 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   const urlCount = urls.filter(Boolean).length;
   score += urlCount * 3; // max +12
 
-  // Link-in-bio (signals active online presence)
+  // Direct URLs (higher signal than booleans)
+  if (creator.course_url) score += 3;
   if (creator.link_in_bio_url) score += 2;
+  if (creator.discord_url) score += 2;
+  if (creator.telegram_url) score += 2;
 
   // Account-level signals
   const platformCount = new Set(accounts.map(a => a.platform)).size;
@@ -79,10 +82,15 @@ export function computeConfidenceScore({ creator, accounts }: ScoreInput): numbe
     if (creator[field]) score += 3;
   }
 
+  // Classification data
+  if (creator.niche) score += 4;
+  if (creator.source_type) score += 3;
+  if (creator.primary_platform) score += 3;
+
   // Account data
-  if (accounts.length > 0) score += 8;
-  if (accounts.some(a => a.bio)) score += 4;
-  if (accounts.some(a => a.followers && a.followers > 0)) score += 4;
+  if (accounts.length > 0) score += 6;
+  if (accounts.some(a => a.bio)) score += 3;
+  if (accounts.some(a => a.followers && a.followers > 0)) score += 3;
 
   return Math.min(Math.round(score), 100);
 }

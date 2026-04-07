@@ -223,6 +223,8 @@ function toDiscoveredCreator(ch: YouTubeChannel, videos: YouTubeVideo[]): YouTub
     slug: ch.customUrl?.replace(/^@/, '') || ch.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
     website,
     bio: ch.description.slice(0, 1000),
+    source_type: 'youtube_api',
+    source_url: ch.customUrl ? `https://youtube.com/${ch.customUrl}` : `https://youtube.com/channel/${ch.id}`,
     account: {
       platform: 'youtube',
       handle: ch.customUrl || ch.title,

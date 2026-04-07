@@ -70,9 +70,28 @@ export default function CreatorDetailPage() {
 
           <Section title="Stats">
             <Field label="Total Followers" value={formatFollowers(creator.total_followers)} />
+            <Field label="Niche" value={creator.niche} />
+            <Field label="Primary Platform" value={creator.primary_platform} />
+            <Field label="Source" value={creator.source_type} />
+          </Section>
+
+          <Section title="Profiles">
+            <Field label="Instagram" value={creator.instagram_url} link />
+            <Field label="LinkedIn" value={creator.linkedin_url} link />
+            <Field label="YouTube" value={creator.youtube_url} link />
+            <Field label="X" value={creator.x_url} link />
+            <Field label="Discord" value={creator.discord_url} link />
+            <Field label="Telegram" value={creator.telegram_url} link />
+            <Field label="Link-in-Bio" value={creator.link_in_bio_url} link />
+            <Field label="Course" value={creator.course_url} link />
+          </Section>
+
+          <Section title="Signals">
             <Field label="Has Course" value={creator.has_course ? 'Yes' : 'No'} />
             <Field label="Has Discord" value={creator.has_discord ? 'Yes' : 'No'} />
             <Field label="Has Telegram" value={creator.has_telegram ? 'Yes' : 'No'} />
+            <Field label="Has Skool" value={creator.has_skool ? 'Yes' : 'No'} />
+            <Field label="Has Whop" value={creator.has_whop ? 'Yes' : 'No'} />
             <Field label="Prop Firms" value={creator.promoting_prop_firms ? 'Yes' : 'No'} />
           </Section>
 

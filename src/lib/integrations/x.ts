@@ -165,6 +165,8 @@ function toDiscoveredCreator(user: XUser): DiscoveredCreator {
     slug: user.username.toLowerCase(),
     website: resolveUserWebsite(user),
     bio: user.description?.slice(0, 1000) ?? null,
+    source_type: 'x_api',
+    source_url: `https://x.com/${user.username}`,
     account: {
       platform: 'x',
       handle: user.username,
