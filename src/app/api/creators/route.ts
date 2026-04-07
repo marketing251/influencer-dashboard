@@ -57,5 +57,13 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data ?? []);
+
+  // Remap Supabase join name to what the UI expects
+  const normalized = (data ?? []).map(c => ({
+    ...c,
+    accounts: c.creator_accounts ?? [],
+    prop_firms_mentioned: c.prop_firms_mentioned ?? [],
+  }));
+
+  return NextResponse.json(normalized);
 }

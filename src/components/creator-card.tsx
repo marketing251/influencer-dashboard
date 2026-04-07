@@ -84,9 +84,9 @@ export function CreatorCard({ creator }: Props) {
       )}
 
       {/* Prop firms */}
-      {creator.prop_firms_mentioned.length > 0 && (
+      {(creator.prop_firms_mentioned ?? []).length > 0 && (
         <div className="mt-2 text-xs text-zinc-600">
-          Mentions: {creator.prop_firms_mentioned.join(', ')}
+          Mentions: {(creator.prop_firms_mentioned ?? []).join(', ')}
         </div>
       )}
     </Link>
