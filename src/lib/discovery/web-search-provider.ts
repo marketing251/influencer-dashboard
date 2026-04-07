@@ -114,17 +114,19 @@ async function runWebDiscovery(platform: 'instagram' | 'linkedin'): Promise<Disc
 export const webSearchInstagramProvider: DiscoveryProvider = {
   platform: 'instagram',
   type: 'api',
-  label: 'Web Search (Instagram)',
-  isConfigured() { return Boolean(process.env.BRAVE_SEARCH_API_KEY); },
+  label: process.env.BRAVE_SEARCH_API_KEY ? 'Web Search (Instagram)' : 'Curated Lists (Instagram)',
+  // Always configured: uses Brave if key is set, otherwise crawls curated list pages
+  isConfigured() { return true; },
   async discover() { return runWebDiscovery('instagram'); },
-  configHint() { return 'Set BRAVE_SEARCH_API_KEY. Get one free at https://brave.com/search/api/ (2000 queries/month free).'; },
+  configHint() { return 'Running with curated list pages. Set BRAVE_SEARCH_API_KEY for dynamic search (free at brave.com/search/api).'; },
 };
 
 export const webSearchLinkedInProvider: DiscoveryProvider = {
   platform: 'linkedin',
   type: 'api',
-  label: 'Web Search (LinkedIn)',
-  isConfigured() { return Boolean(process.env.BRAVE_SEARCH_API_KEY); },
+  label: process.env.BRAVE_SEARCH_API_KEY ? 'Web Search (LinkedIn)' : 'Curated Lists (LinkedIn)',
+  // Always configured: uses Brave if key is set, otherwise crawls curated list pages
+  isConfigured() { return true; },
   async discover() { return runWebDiscovery('linkedin'); },
-  configHint() { return 'Set BRAVE_SEARCH_API_KEY. Get one free at https://brave.com/search/api/ (2000 queries/month free).'; },
+  configHint() { return 'Running with curated list pages. Set BRAVE_SEARCH_API_KEY for dynamic search (free at brave.com/search/api).'; },
 };
