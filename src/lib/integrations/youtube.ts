@@ -108,6 +108,12 @@ async function ytFetch<T>(endpoint: string, params: Record<string, string>): Pro
   const res = await fetch(url.toString());
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    if (res.status === 403 && body.includes('quotaExceeded')) {
+      throw new Error('YouTube API daily quota exceeded — resets at midnight Pacific. Request higher quota at console.cloud.google.com');
+    }
+    if (res.status === 403) {
+      throw new Error(`YouTube API forbidden (${res.status}): ensure YouTube Data API v3 is enabled in your Google Cloud project`);
+    }
     throw new Error(`YouTube API ${endpoint} ${res.status}: ${body.slice(0, 300)}`);
   }
   return res.json() as Promise<T>;

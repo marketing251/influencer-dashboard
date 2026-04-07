@@ -93,6 +93,9 @@ async function xFetch<T>(path: string, params?: Record<string, string>): Promise
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    if (body.includes('CreditsDepleted') || body.includes('credits')) {
+      throw new Error('X API credits depleted — your plan has no remaining credits this month. Upgrade at developer.x.com');
+    }
     throw new Error(`X API ${path} ${res.status}: ${body.slice(0, 300)}`);
   }
 

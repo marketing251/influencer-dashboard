@@ -4,7 +4,6 @@
  * All these services server-render their link lists — no headless browser needed.
  */
 
-import { extractAllSignals } from '../social-links';
 import { extractPropFirmNames } from '../prop-firms';
 import { log } from '../logger';
 

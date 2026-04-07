@@ -49,21 +49,31 @@ function DailyLeadsContent() {
         return;
       }
 
-      const ytNew = data.youtube?.new ?? 0;
-      const xNew = data.x?.new ?? 0;
-      const ytUpdated = data.youtube?.updated ?? 0;
-      const xUpdated = data.x?.updated ?? 0;
+      // Aggregate results across all platforms
+      const platforms = data.platforms ?? { youtube: data.youtube, x: data.x };
+      let totalNew = 0, totalUpdated = 0, totalErrors = 0;
+      const skipped: string[] = [];
+
+      for (const [name, result] of Object.entries(platforms)) {
+        const r = result as { new?: number; updated?: number; errors?: number; skippedReason?: string } | null;
+        if (!r) continue;
+        if (r.skippedReason) { skipped.push(name); continue; }
+        totalNew += r.new ?? 0;
+        totalUpdated += r.updated ?? 0;
+        totalErrors += r.errors ?? 0;
+      }
+
       const enriched = data.enrichment?.enriched ?? 0;
-      const totalNew = ytNew + xNew;
-      const totalUpdated = ytUpdated + xUpdated;
 
       const parts: string[] = [];
       if (totalNew > 0) parts.push(`${totalNew} new`);
       if (totalUpdated > 0) parts.push(`${totalUpdated} updated`);
       if (enriched > 0) parts.push(`${enriched} enriched`);
+      if (skipped.length > 0) parts.push(`${skipped.join(', ')} skipped (no API key/credits)`);
+      if (totalErrors > 0) parts.push(`${totalErrors} errors`);
 
       setRefreshStatus('success');
-      setRefreshMessage(parts.length > 0 ? parts.join(', ') : 'No new creators found');
+      setRefreshMessage(parts.length > 0 ? parts.join(' | ') : 'No new creators found — check API keys and quotas');
 
       // Refetch the table data
       fetchCreators();
