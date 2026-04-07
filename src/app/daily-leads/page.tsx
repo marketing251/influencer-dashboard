@@ -14,7 +14,7 @@ function DailyLeadsContent() {
   const searchParams = useSearchParams();
   const [creators, setCreators] = useState<CreatorWithAccounts[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'grid' | 'table'>('grid');
+  const [view, setView] = useState<'grid' | 'table'>('table');
 
   useEffect(() => {
     setLoading(true);
