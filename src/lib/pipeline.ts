@@ -16,6 +16,7 @@
 import { isSupabaseConfigured, supabaseAdmin } from './db';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
 import { detectPropFirmsFromSources } from './prop-firms';
+import { extractSocialLinks } from './social-links';
 import { log } from './logger';
 import type { Platform } from './types';
 
@@ -27,11 +28,14 @@ const TELEGRAM_PATTERN = /t\.me\//i;
 
 function analyzeText(texts: (string | null | undefined)[]) {
   const combined = texts.filter(Boolean).join(' ');
+  const socialLinks = extractSocialLinks(...texts);
   return {
     propFirms: detectPropFirmsFromSources(...texts),
     hasCourse: COURSE_PATTERN.test(combined),
     hasDiscord: DISCORD_PATTERN.test(combined),
     hasTelegram: TELEGRAM_PATTERN.test(combined),
+    instagramUrl: socialLinks.instagram_url,
+    linkedinUrl: socialLinks.linkedin_url,
   };
 }
 
@@ -151,6 +155,7 @@ async function updateExistingCreator(
   const totalFollowers = accountsForScoring.reduce((sum, a) => sum + (a.followers ?? 0), 0);
 
   // Merge: booleans only upgrade (false→true), never downgrade
+  // URLs: only set if not already present (don't overwrite)
   const merged = {
     total_followers: totalFollowers,
     has_course: current.has_course || signals.hasCourse,
@@ -159,6 +164,8 @@ async function updateExistingCreator(
     promoting_prop_firms: current.promoting_prop_firms || mergedFirms.length > 0,
     prop_firms_mentioned: mergedFirms,
     website: current.website || data.website || null,
+    instagram_url: current.instagram_url || signals.instagramUrl || null,
+    linkedin_url: current.linkedin_url || signals.linkedinUrl || null,
   };
 
   const leadScore = computeLeadScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
@@ -249,6 +256,8 @@ async function createNewCreator(
     has_telegram: signals.hasTelegram,
     promoting_prop_firms: signals.propFirms.length > 0,
     prop_firms_mentioned: signals.propFirms,
+    instagram_url: signals.instagramUrl || null,
+    linkedin_url: signals.linkedinUrl || null,
     lead_score: 0,
     confidence_score: 0,
     first_seen_at: now,

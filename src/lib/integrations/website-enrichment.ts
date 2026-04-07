@@ -46,6 +46,7 @@ const SOCIAL_PATTERNS: { platform: string; pattern: RegExp }[] = [
   { platform: 'discord', pattern: /https?:\/\/(?:www\.)?discord\.(?:gg|com\/invite)\/[^\s"'<>]+/i },
   { platform: 'telegram', pattern: /https?:\/\/t\.me\/[^\s"'<>]+/i },
   { platform: 'twitch', pattern: /https?:\/\/(?:www\.)?twitch\.tv\/[^\s"'<>]+/i },
+  { platform: 'linkedin', pattern: /https?:\/\/(?:www\.)?linkedin\.com\/(?:in|company)\/[^\s"'<>]+/i },
 ];
 
 const COURSE_INDICATORS = /\b(?:course|enroll|curriculum|lesson|module|masterclass|bootcamp|academy|mentorship|coaching|program|training|workshop|certification)\b/i;

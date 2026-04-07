@@ -8,6 +8,7 @@
 
 import { isSupabaseConfigured, supabaseAdmin } from './db';
 import { enrichFromWebsite } from './integrations/website-enrichment';
+import { extractSocialLinks } from './social-links';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
 import { upsertCreator, logDiscoveryRun } from './pipeline';
 import { withLogging, log } from './logger';
@@ -88,40 +89,78 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
   const stats = { attempted: 0, enriched: 0, errors: 0 };
   if (!isSupabaseConfigured()) return stats;
 
+  // Enrich creators that have a website but are missing email, instagram, or linkedin
   const { data: creatorsToEnrich } = await supabaseAdmin
     .from('creators')
-    .select('id, website')
+    .select('id, website, public_email, instagram_url, linkedin_url, prop_firms_mentioned')
     .not('website', 'is', null)
-    .is('public_email', null)
     .order('lead_score', { ascending: false })
-    .limit(20);
+    .limit(30);
 
-  if (!creatorsToEnrich?.length) return stats;
+  // Filter to those missing at least one enrichable field
+  const needsEnrichment = (creatorsToEnrich ?? []).filter(c =>
+    !c.public_email || !c.instagram_url || !c.linkedin_url,
+  );
+  if (!needsEnrichment.length) return stats;
 
-  for (const creator of creatorsToEnrich) {
+  for (const creator of needsEnrichment) {
     stats.attempted++;
     try {
       const enrichment = await enrichFromWebsite(creator.website);
 
-      if (enrichment.emails.length > 0 || enrichment.prop_firms_mentioned.length > 0) {
-        const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      // Extract IG/LI from the crawled pages
+      const allPageText = enrichment.pages_crawled.length > 0 ? '' : ''; // text is already in social_links
+      const socialFromPages = extractSocialLinks(
+        ...enrichment.social_links.map(l => l.url),
+      );
 
-        if (enrichment.emails.length > 0) updates.public_email = enrichment.emails[0];
-        if (enrichment.phones.length > 0) updates.public_phone = enrichment.phones[0];
-        if (enrichment.has_course) updates.has_course = true;
-        if (enrichment.has_discord) updates.has_discord = true;
-        if (enrichment.has_telegram) updates.has_telegram = true;
-        if (enrichment.prop_firms_mentioned.length > 0) {
-          updates.promoting_prop_firms = true;
-          const { data: existing } = await supabaseAdmin
-            .from('creators').select('prop_firms_mentioned').eq('id', creator.id).single();
-          updates.prop_firms_mentioned = [
-            ...new Set([...(existing?.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned]),
-          ];
-        }
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      let changed = false;
 
+      // Email and phone
+      if (enrichment.emails.length > 0 && !creator.public_email) {
+        updates.public_email = enrichment.emails[0];
+        changed = true;
+      }
+      if (enrichment.phones.length > 0) {
+        updates.public_phone = enrichment.phones[0];
+        changed = true;
+      }
+
+      // Boolean signals
+      if (enrichment.has_course) { updates.has_course = true; changed = true; }
+      if (enrichment.has_discord) { updates.has_discord = true; changed = true; }
+      if (enrichment.has_telegram) { updates.has_telegram = true; changed = true; }
+
+      // Prop firms
+      if (enrichment.prop_firms_mentioned.length > 0) {
+        updates.promoting_prop_firms = true;
+        updates.prop_firms_mentioned = [
+          ...new Set([...(creator.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned]),
+        ];
+        changed = true;
+      }
+
+      // Instagram URL — from social_links or direct extraction
+      const igUrl = enrichment.social_links.find(l => l.platform === 'instagram')?.url
+        ?? socialFromPages.instagram_url;
+      if (igUrl && !creator.instagram_url) {
+        updates.instagram_url = igUrl;
+        changed = true;
+      }
+
+      // LinkedIn URL — from social_links or direct extraction
+      const liUrl = enrichment.social_links.find(l => l.platform === 'linkedin')?.url
+        ?? socialFromPages.linkedin_url;
+      if (liUrl && !creator.linkedin_url) {
+        updates.linkedin_url = liUrl;
+        changed = true;
+      }
+
+      if (changed) {
         await supabaseAdmin.from('creators').update(updates).eq('id', creator.id);
 
+        // Recalculate scores
         const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', creator.id).single();
         const { data: accounts } = await supabaseAdmin
           .from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);

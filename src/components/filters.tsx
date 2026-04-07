@@ -26,6 +26,8 @@ const toggleFilters = [
   { key: 'has_discord', label: 'Discord' },
   { key: 'has_telegram', label: 'Telegram' },
   { key: 'promoting_prop_firms', label: 'Prop Firms' },
+  { key: 'has_instagram', label: 'Instagram' },
+  { key: 'has_linkedin', label: 'LinkedIn' },
   { key: 'new_today', label: 'New Today' },
 ];
 

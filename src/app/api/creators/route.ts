@@ -13,6 +13,8 @@ export async function GET(request: NextRequest) {
     has_discord: params.get('has_discord') === 'true' ? true : undefined,
     has_telegram: params.get('has_telegram') === 'true' ? true : undefined,
     promoting_prop_firms: params.get('promoting_prop_firms') === 'true' ? true : undefined,
+    has_instagram: params.get('has_instagram') === 'true' ? true : undefined,
+    has_linkedin: params.get('has_linkedin') === 'true' ? true : undefined,
     new_today: params.get('new_today') === 'true' ? true : undefined,
     status: params.get('status') as CreatorFilters['status'] ?? undefined,
     search: params.get('search') || undefined,
@@ -35,6 +37,8 @@ export async function GET(request: NextRequest) {
   if (filters.has_discord) query = query.eq('has_discord', true);
   if (filters.has_telegram) query = query.eq('has_telegram', true);
   if (filters.promoting_prop_firms) query = query.eq('promoting_prop_firms', true);
+  if (filters.has_instagram) query = query.not('instagram_url', 'is', null);
+  if (filters.has_linkedin) query = query.not('linkedin_url', 'is', null);
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.search) query = query.ilike('name', `%${filters.search}%`);
 

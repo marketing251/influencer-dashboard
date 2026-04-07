@@ -17,6 +17,8 @@ export interface Creator {
   has_telegram: boolean;
   promoting_prop_firms: boolean;
   prop_firms_mentioned: string[];
+  instagram_url: string | null;
+  linkedin_url: string | null;
   lead_score: number;
   confidence_score: number;
   notes: string | null;
@@ -113,6 +115,8 @@ export interface CreatorFilters {
   has_discord?: boolean;
   has_telegram?: boolean;
   promoting_prop_firms?: boolean;
+  has_instagram?: boolean;
+  has_linkedin?: boolean;
   new_today?: boolean;
   status?: CreatorStatus;
   search?: string;

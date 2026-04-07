@@ -17,6 +17,8 @@ CREATE TABLE creators (
   has_telegram BOOLEAN DEFAULT FALSE,
   promoting_prop_firms BOOLEAN DEFAULT FALSE,
   prop_firms_mentioned TEXT[] DEFAULT '{}',
+  instagram_url TEXT,
+  linkedin_url TEXT,
   lead_score REAL DEFAULT 0,
   confidence_score REAL DEFAULT 0,
   notes TEXT,
@@ -111,3 +113,5 @@ CREATE INDEX idx_outreach_status ON outreach(status);
 -- CREATE INDEX IF NOT EXISTS idx_creators_last_seen ON creators(last_seen_at DESC);
 -- CREATE INDEX IF NOT EXISTS idx_creator_accounts_platform_id ON creator_accounts(platform, platform_id);
 -- CREATE INDEX IF NOT EXISTS idx_creator_posts_url ON creator_posts(post_url);
+-- ALTER TABLE creators ADD COLUMN IF NOT EXISTS instagram_url TEXT;
+-- ALTER TABLE creators ADD COLUMN IF NOT EXISTS linkedin_url TEXT;

@@ -30,6 +30,8 @@ function flattenCreators(creators: CreatorWithAccounts[]) {
     'Has Telegram': c.has_telegram ? 'Yes' : 'No',
     'Promoting Prop Firms': c.promoting_prop_firms ? 'Yes' : 'No',
     'Prop Firms Mentioned': c.prop_firms_mentioned.join(', '),
+    'Instagram': c.instagram_url ?? '',
+    'LinkedIn': c.linkedin_url ?? '',
     Platforms: c.accounts.map(a => a.platform).join(', '),
     Handles: c.accounts.map(a => `${a.platform}: @${a.handle}`).join('; '),
     Notes: c.notes ?? '',

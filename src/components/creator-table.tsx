@@ -49,6 +49,7 @@ export function CreatorTable({ creators }: Props) {
             <th className="px-3 py-2.5 font-medium text-right">Score</th>
             <th className="px-3 py-2.5 font-medium">Website</th>
             <th className="px-3 py-2.5 font-medium">Signals</th>
+            <th className="px-3 py-2.5 font-medium">Profiles</th>
             <th className="px-3 py-2.5 font-medium">Prop Firms</th>
             <th className="px-3 py-2.5 font-medium">First Seen</th>
           </tr>
@@ -139,6 +140,27 @@ export function CreatorTable({ creators }: Props) {
                     {c.has_discord && <Signal label="Discord" />}
                     {c.has_telegram && <Signal label="TG" />}
                     {c.promoting_prop_firms && <Signal label="Prop" highlight />}
+                  </div>
+                </td>
+
+                {/* Instagram / LinkedIn profiles */}
+                <td className="px-3 py-2.5">
+                  <div className="flex gap-1.5">
+                    {c.instagram_url ? (
+                      <a href={c.instagram_url} target="_blank" rel="noopener noreferrer"
+                        className="rounded bg-pink-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-pink-400 hover:bg-pink-500/30">
+                        IG
+                      </a>
+                    ) : null}
+                    {c.linkedin_url ? (
+                      <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer"
+                        className="rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-blue-400 hover:bg-blue-500/30">
+                        LI
+                      </a>
+                    ) : null}
+                    {!c.instagram_url && !c.linkedin_url && (
+                      <span className="text-xs text-zinc-700">—</span>
+                    )}
                   </div>
                 </td>
 
