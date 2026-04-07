@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, supabase } from '@/lib/db';
-import { mockCreators, mockAccounts } from '@/lib/mock-data';
 import type { CreatorFilters } from '@/lib/types';
 
 export async function GET(request: NextRequest) {
@@ -20,12 +19,10 @@ export async function GET(request: NextRequest) {
     sort_order: (params.get('sort_order') as CreatorFilters['sort_order']) || 'desc',
   };
 
-  // Use mock data if Supabase is not configured
-  if (!isSupabaseConfigured() || process.env.USE_MOCK_DATA === 'true') {
-    return NextResponse.json(filterMockCreators(filters));
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json([]);
   }
 
-  // Supabase query
   let query = supabase.from('creators').select('*, creator_accounts(*)');
 
   if (filters.platform) {
@@ -46,42 +43,5 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json(data);
-}
-
-function filterMockCreators(filters: CreatorFilters) {
-  let creators = [...mockCreators];
-
-  if (filters.platform) {
-    const platformCreatorIds = new Set(
-      mockAccounts.filter(a => a.platform === filters.platform).map(a => a.creator_id),
-    );
-    creators = creators.filter(c => platformCreatorIds.has(c.id));
-  }
-  if (filters.min_followers) creators = creators.filter(c => c.total_followers >= filters.min_followers!);
-  if (filters.max_followers) creators = creators.filter(c => c.total_followers <= filters.max_followers!);
-  if (filters.has_course) creators = creators.filter(c => c.has_course);
-  if (filters.has_discord) creators = creators.filter(c => c.has_discord);
-  if (filters.has_telegram) creators = creators.filter(c => c.has_telegram);
-  if (filters.promoting_prop_firms) creators = creators.filter(c => c.promoting_prop_firms);
-  if (filters.status) creators = creators.filter(c => c.status === filters.status);
-  if (filters.search) {
-    const q = filters.search.toLowerCase();
-    creators = creators.filter(c => c.name.toLowerCase().includes(q));
-  }
-
-  const sortBy = filters.sort_by || 'lead_score';
-  const order = filters.sort_order === 'asc' ? 1 : -1;
-  creators.sort((a, b) => {
-    const aVal = a[sortBy as keyof typeof a];
-    const bVal = b[sortBy as keyof typeof b];
-    if (typeof aVal === 'number' && typeof bVal === 'number') return (aVal - bVal) * order;
-    return String(aVal).localeCompare(String(bVal)) * order;
-  });
-
-  // Attach accounts
-  return creators.map(c => ({
-    ...c,
-    accounts: mockAccounts.filter(a => a.creator_id === c.id),
-  }));
+  return NextResponse.json(data ?? []);
 }

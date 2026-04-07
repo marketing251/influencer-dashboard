@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, supabase } from '@/lib/db';
-import { getMockCreatorWithAccounts } from '@/lib/mock-data';
 
 export async function GET(
   _request: NextRequest,
@@ -8,10 +7,8 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  if (!isSupabaseConfigured() || process.env.USE_MOCK_DATA === 'true') {
-    const creator = getMockCreatorWithAccounts(id);
-    if (!creator) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    return NextResponse.json(creator);
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json({ error: 'Database not configured' }, { status: 503 });
   }
 
   const { data: creator, error } = await supabase
@@ -26,8 +23,8 @@ export async function GET(
 
   return NextResponse.json({
     ...creator,
-    accounts: creator.creator_accounts,
-    posts: creator.creator_posts,
-    outreach_history: creator.outreach,
+    accounts: creator.creator_accounts ?? [],
+    posts: creator.creator_posts ?? [],
+    outreach_history: creator.outreach ?? [],
   });
 }

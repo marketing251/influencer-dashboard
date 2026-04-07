@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSupabaseConfigured, supabase } from '@/lib/db';
-import { mockOutreach } from '@/lib/mock-data';
 
 export async function GET(request: NextRequest) {
   const status = request.nextUrl.searchParams.get('status');
 
-  if (!isSupabaseConfigured() || process.env.USE_MOCK_DATA === 'true') {
-    let data = [...mockOutreach];
-    if (status) data = data.filter(o => o.status === status);
-    return NextResponse.json(data);
+  if (!isSupabaseConfigured()) {
+    return NextResponse.json([]);
   }
 
   let query = supabase
@@ -22,6 +19,9 @@ export async function GET(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json(
-    data?.map(o => ({ ...o, creator_name: o.creators?.name })) ?? [],
+    (data ?? []).map(o => ({
+      ...o,
+      creator_name: (o as unknown as { creators?: { name: string } }).creators?.name,
+    })),
   );
 }
