@@ -2,10 +2,10 @@
  * Web discovery for Instagram and LinkedIn trading influencers.
  *
  * Two modes:
- * 1. Brave Search API (if BRAVE_SEARCH_API_KEY is set) — searches dynamically
- * 2. Direct crawl fallback (no API key needed) — fetches curated public list pages
+ * 1. Brave Search API (if BRAVE_SEARCH_API_KEY is set) — dynamic search
+ * 2. DuckDuckGo HTML search (no API key needed) — free, always available
  *
- * Both modes extract candidate profiles from HTML using the same extraction engine.
+ * Both modes extract candidate profiles from search results and crawled pages.
  */
 
 import { log } from '../logger';
@@ -36,12 +36,13 @@ class RateLimiter {
   }
 }
 
+const searchLimit = new RateLimiter(2000); // polite delay between search queries
 const fetchLimit = new RateLimiter(1500);
 
-// ─── Page fetcher ───────────────────────────────────────────────────
+// ─── Shared page fetcher ────────────────────────────────────────────
 
-async function fetchPage(url: string): Promise<string | null> {
-  await fetchLimit.wait();
+async function fetchPage(url: string, rateLimit = true): Promise<string | null> {
+  if (rateLimit) await fetchLimit.wait();
   try {
     const res = await fetch(url, {
       headers: {
@@ -52,255 +53,180 @@ async function fetchPage(url: string): Promise<string | null> {
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return null;
-    const ct = res.headers.get('content-type') ?? '';
-    if (!ct.includes('text/html') && !ct.includes('text/plain')) return null;
     return await res.text();
   } catch {
     return null;
   }
 }
 
-// ─── Curated list pages (no API key needed) ─────────────────────────
-// These are publicly accessible article/list pages that mention trading
-// influencers with their Instagram and LinkedIn profiles.
-// Updated periodically — add new URLs as you find good sources.
-
-const CURATED_IG_PAGES = [
-  { url: 'https://www.benzinga.com/money/best-forex-instagram-accounts', title: 'Benzinga: Best Forex Instagram Accounts' },
-  { url: 'https://www.investopedia.com/best-forex-traders-to-follow-on-social-media-5188696', title: 'Investopedia: Best Forex Traders on Social Media' },
-  { url: 'https://tradingbrowser.com/best-forex-instagram-accounts/', title: 'TradingBrowser: Best Forex Instagram Accounts' },
-  { url: 'https://www.litefinance.org/blog/for-professionals/forex-traders-blogs/best-forex-traders-on-instagram/', title: 'LiteFinance: Best Forex Traders on Instagram' },
-  { url: 'https://www.axi.com/int/blog/education/forex/best-forex-traders-to-follow', title: 'Axi: Best Forex Traders to Follow' },
-  { url: 'https://admiralmarkets.com/education/articles/forex-basics/best-forex-traders-in-the-world', title: 'Admiral Markets: Best Forex Traders' },
-  { url: 'https://www.forexbrokers.com/guides/best-forex-influencers', title: 'ForexBrokers: Best Forex Influencers' },
-  { url: 'https://medium.com/@tradingcommunity/top-forex-instagram-accounts-to-follow-in-2024-2025-8c1a2f3d4e5b', title: 'Medium: Top Forex Instagram Accounts' },
-  { url: 'https://www.daytrading.com/traders-to-follow', title: 'DayTrading.com: Traders to Follow' },
-  { url: 'https://www.warriortrading.com/day-trading-chat-room/', title: 'Warrior Trading: Day Trading Community' },
-];
-
-const CURATED_LI_PAGES = [
-  { url: 'https://www.benzinga.com/money/best-forex-linkedin-accounts', title: 'Benzinga: Best Forex LinkedIn Accounts' },
-  { url: 'https://www.investopedia.com/best-forex-traders-to-follow-on-social-media-5188696', title: 'Investopedia: Best Forex Traders on Social Media' },
-  { url: 'https://tradingbrowser.com/best-forex-influencers/', title: 'TradingBrowser: Best Forex Influencers' },
-  { url: 'https://www.axi.com/int/blog/education/forex/best-forex-traders-to-follow', title: 'Axi: Best Forex Traders to Follow' },
-  { url: 'https://admiralmarkets.com/education/articles/forex-basics/best-forex-traders-in-the-world', title: 'Admiral Markets: Best Forex Traders' },
-  { url: 'https://www.forexbrokers.com/guides/best-forex-influencers', title: 'ForexBrokers: Best Forex Influencers' },
-  { url: 'https://www.daytrading.com/traders-to-follow', title: 'DayTrading.com: Traders to Follow' },
-  { url: 'https://www.linkedin.com/pulse/top-forex-traders-follow-2024-trading-education/', title: 'LinkedIn Pulse: Top Forex Traders' },
-  { url: 'https://medium.com/@forexeducation/best-prop-firm-traders-on-social-media-2024-a1b2c3d4e5f6', title: 'Medium: Best Prop Firm Traders' },
-  { url: 'https://www.warriortrading.com/day-trading-chat-room/', title: 'Warrior Trading: Day Trading Community' },
-];
-
-// ─── Brave Search (optional) ────────────────────────────────────────
-
-const BRAVE_BASE = 'https://api.search.brave.com/res/v1/web/search';
-const braveLimit = new RateLimiter(1100);
+// ─── Search queries per platform ────────────────────────────────────
 
 const IG_QUERIES = [
-  'best forex traders Instagram 2025 2026',
-  'top trading influencers Instagram prop firm',
-  'funded trader Instagram accounts to follow',
-  'day trading Instagram educators list',
-  'forex Instagram influencers directory',
+  'instagram.com forex trader educator',
+  'instagram.com prop firm funded trader FTMO',
+  'instagram.com funded trader payout results',
+  'instagram.com trading mentor course academy',
+  'instagram.com forex signals community',
+  'instagram.com day trading scalping live',
+  'instagram.com smart money ICT trading',
+  'instagram.com options trading education',
+  'instagram.com futures trading NQ ES',
+  'best forex traders instagram list 2024 2025',
+  'top trading influencers instagram prop firm list',
+  'funded trader instagram accounts to follow',
 ];
 
 const LI_QUERIES = [
-  'top forex traders LinkedIn profile',
-  'prop firm funded traders LinkedIn',
-  'trading educators LinkedIn list 2025 2026',
-  'day trading coaches LinkedIn directory',
-  'forex mentors LinkedIn profiles list',
+  'linkedin.com/in forex trader educator',
+  'linkedin.com/in prop firm funded trader',
+  'linkedin.com/in trading mentor coach',
+  'linkedin.com/in day trading education',
+  'linkedin.com/in funded trader FTMO results',
+  'top forex traders linkedin profile list',
+  'trading educators linkedin 2024 2025',
+  'prop firm trader linkedin profiles',
 ];
 
-interface WebSearchResult {
-  title: string;
-  url: string;
+// ─── DuckDuckGo HTML search (no API key needed) ────────────────────
+
+async function searchDuckDuckGo(query: string): Promise<string | null> {
+  await searchLimit.wait();
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  return fetchPage(url, false);
 }
 
-async function searchBrave(query: string, count = 10): Promise<WebSearchResult[]> {
+// ─── Brave Search API (optional) ────────────────────────────────────
+
+async function searchBrave(query: string): Promise<{ url: string; title: string }[]> {
   const key = process.env.BRAVE_SEARCH_API_KEY;
   if (!key) return [];
 
-  await braveLimit.wait();
-  const params = new URLSearchParams({ q: query, count: String(count), safesearch: 'moderate' });
-  const res = await fetch(`${BRAVE_BASE}?${params}`, {
-    headers: { Accept: 'application/json', 'X-Subscription-Token': key },
-  });
-  if (!res.ok) {
-    log.warn('web-search: Brave API error', { status: res.status });
+  await searchLimit.wait();
+  const params = new URLSearchParams({ q: query, count: '10', safesearch: 'moderate' });
+  try {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?${params}`, {
+      headers: { Accept: 'application/json', 'X-Subscription-Token': key },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.web?.results ?? []).map((r: { title: string; url: string }) => ({ title: r.title, url: r.url }));
+  } catch {
     return [];
   }
-  const data = await res.json();
-  return (data.web?.results ?? []).map((r: { title: string; url: string }) => ({ title: r.title, url: r.url }));
 }
 
-// ─── Candidate extraction from HTML ─────────────────────────────────
+// ─── Profile extraction from HTML ───────────────────────────────────
 
-const IG_PROFILE_RE = /https?:\/\/(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]{2,30})\/?/gi;
-const LI_PROFILE_RE = /https?:\/\/(?:www\.)?linkedin\.com\/(?:in|company)\/([a-zA-Z0-9\-]{2,60})\/?/gi;
-const LINK_IN_BIO_RE = /https?:\/\/(?:www\.)?(?:linktr\.ee|beacons\.ai|stan\.store|bio\.link|lnk\.bio)\/[a-zA-Z0-9_.\-]+/gi;
-const WEBSITE_RE = /https?:\/\/[^\s"'<>]+/gi;
+const IG_RE = /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]{2,30})\b/gi;
+const LI_RE = /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:in|company)\/([a-zA-Z0-9\-]{2,60})\b/gi;
+const LIB_RE = /https?:\/\/(?:www\.)?(?:linktr\.ee|beacons\.ai|stan\.store|bio\.link|lnk\.bio)\/[a-zA-Z0-9_.\-]+/gi;
 
-const IG_BLACKLIST = new Set(['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct', 'about', 'developer', 'legal', 'tv', 'tags']);
-const LI_BLACKLIST = new Set(['feed', 'jobs', 'messaging', 'notifications', 'mynetwork', 'search', 'help', 'legal', 'pulse', 'learning', 'posts']);
+const IG_BLACKLIST = new Set(['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct', 'about', 'developer', 'legal', 'tv', 'tags', '_u', '_n', 'popular', 'nametag']);
+const LI_BLACKLIST = new Set(['feed', 'jobs', 'messaging', 'notifications', 'mynetwork', 'search', 'help', 'legal', 'pulse', 'learning', 'posts', 'company']);
 
-const SOCIAL_DOMAINS = new Set(['instagram.com', 'linkedin.com', 'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 'facebook.com', 'discord.gg', 'discord.com', 't.me', 'linktr.ee', 'beacons.ai', 'stan.store']);
+function extractHandlesFromHtml(html: string, platform: 'instagram' | 'linkedin'): Set<string> {
+  const handles = new Set<string>();
+  const re = platform === 'instagram' ? IG_RE : LI_RE;
+  const blacklist = platform === 'instagram' ? IG_BLACKLIST : LI_BLACKLIST;
 
-function extractCandidatesFromHtml(html: string, sourceUrl: string, sourceTitle: string): ExtractedCandidate[] {
-  const candidates: ExtractedCandidate[] = [];
-  const text = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  const seen = new Set<string>();
-
-  // Extract Instagram profiles
-  IG_PROFILE_RE.lastIndex = 0;
+  re.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = IG_PROFILE_RE.exec(html)) !== null) {
-    const handle = m[1].toLowerCase();
-    if (IG_BLACKLIST.has(handle) || seen.has(`ig:${handle}`)) continue;
-    seen.add(`ig:${handle}`);
-
-    const name = guessNameNearUrl(text, m.index, handle);
-    candidates.push({
-      name: name || prettifyHandle(handle),
-      handle,
-      platformHint: 'instagram',
-      profileUrl: `https://instagram.com/${handle}`,
-      websiteUrl: findNearbyWebsite(html, m.index),
-      linkInBioUrl: null,
-      sourceUrl,
-      sourceTitle,
-    });
+  while ((m = re.exec(html)) !== null) {
+    const h = m[1].toLowerCase();
+    if (!blacklist.has(h) && h.length > 2) handles.add(h);
   }
-
-  // Extract LinkedIn profiles
-  LI_PROFILE_RE.lastIndex = 0;
-  while ((m = LI_PROFILE_RE.exec(html)) !== null) {
-    const handle = m[1].toLowerCase();
-    if (LI_BLACKLIST.has(handle) || seen.has(`li:${handle}`)) continue;
-    seen.add(`li:${handle}`);
-
-    const type = m[0].includes('/company/') ? 'company' : 'in';
-    const name = guessNameNearUrl(text, m.index, handle);
-    candidates.push({
-      name: name || prettifyHandle(handle),
-      handle,
-      platformHint: 'linkedin',
-      profileUrl: `https://linkedin.com/${type}/${handle}`,
-      websiteUrl: findNearbyWebsite(html, m.index),
-      linkInBioUrl: null,
-      sourceUrl,
-      sourceTitle,
-    });
-  }
-
-  // Attach link-in-bio URLs
-  LINK_IN_BIO_RE.lastIndex = 0;
-  while ((m = LINK_IN_BIO_RE.exec(html)) !== null) {
-    const target = candidates.find(c => !c.linkInBioUrl);
-    if (target) target.linkInBioUrl = m[0];
-  }
-
-  return candidates;
-}
-
-function guessNameNearUrl(text: string, urlIndex: number, handle: string): string | null {
-  const before = text.slice(Math.max(0, urlIndex - 200), urlIndex);
-  // "Name Name" pattern near the URL
-  const nameMatch = before.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\s*$/);
-  if (nameMatch && nameMatch[1].length > 3) return nameMatch[1].trim();
-  return null;
+  return handles;
 }
 
 function prettifyHandle(handle: string): string {
-  return handle.replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return handle
+    .replace(/[_.]/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .trim();
 }
 
-function findNearbyWebsite(html: string, position: number): string | null {
-  // Look for non-social URLs within 500 chars of the profile URL
-  const region = html.slice(Math.max(0, position - 500), position + 500);
-  WEBSITE_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = WEBSITE_RE.exec(region)) !== null) {
-    try {
-      const host = new URL(m[0]).hostname.replace(/^www\./, '');
-      if (!SOCIAL_DOMAINS.has(host) && !host.includes('google') && !host.includes('facebook')) {
-        return m[0].replace(/['">\s].*$/, '');
-      }
-    } catch { /* skip invalid URLs */ }
-  }
-  return null;
-}
+// ─── Main discovery function ────────────────────────────────────────
 
-// ─── Public API ─────────────────────────────────────────────────────
-
-/**
- * Discover Instagram or LinkedIn candidates from web pages.
- * Uses Brave Search if API key is available, otherwise falls back to curated list pages.
- */
 export async function discoverViaWebSearch(opts: {
   platform: 'instagram' | 'linkedin';
   maxPagesToFetch?: number;
 }): Promise<ExtractedCandidate[]> {
-  const { platform, maxPagesToFetch = 20 } = opts;
-
+  const { platform, maxPagesToFetch = 15 } = opts;
+  const queries = platform === 'instagram' ? IG_QUERIES : LI_QUERIES;
   const hasBrave = Boolean(process.env.BRAVE_SEARCH_API_KEY);
-  let pagesToFetch: { url: string; title: string }[] = [];
+  const allHandles = new Map<string, ExtractedCandidate>();
 
+  log.info('web-search: starting', { platform, mode: hasBrave ? 'brave+ddg' : 'ddg', queries: queries.length });
+
+  // Phase 1: Search using DuckDuckGo (always) + Brave (if available)
+  // DuckDuckGo search results directly contain profile URLs in the HTML
+  for (const query of queries) {
+    try {
+      // DuckDuckGo HTML search
+      const ddgHtml = await searchDuckDuckGo(query);
+      if (ddgHtml) {
+        const handles = extractHandlesFromHtml(ddgHtml, platform);
+        for (const handle of handles) {
+          if (!allHandles.has(handle)) {
+            allHandles.set(handle, {
+              name: prettifyHandle(handle),
+              handle,
+              platformHint: platform,
+              profileUrl: platform === 'instagram'
+                ? `https://instagram.com/${handle}`
+                : `https://linkedin.com/in/${handle}`,
+              websiteUrl: null,
+              linkInBioUrl: null,
+              sourceUrl: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`,
+              sourceTitle: `DDG: ${query}`,
+            });
+          }
+        }
+        log.debug('web-search: DDG query done', { query: query.slice(0, 40), found: handles.size });
+      }
+    } catch (err) {
+      log.warn('web-search: DDG query failed', { query: query.slice(0, 40), error: String(err) });
+    }
+  }
+
+  // Phase 2: If Brave is available, also search and fetch result pages for deeper extraction
   if (hasBrave) {
-    // Dynamic search via Brave
-    const queries = platform === 'instagram' ? IG_QUERIES : LI_QUERIES;
     const seenUrls = new Set<string>();
-
-    for (const query of queries) {
+    for (const query of queries.slice(0, 5)) { // limit Brave queries to save quota
       try {
-        const results = await searchBrave(query, 10);
+        const results = await searchBrave(query);
         for (const r of results) {
-          if (!seenUrls.has(r.url)) {
+          if (!seenUrls.has(r.url) && seenUrls.size < maxPagesToFetch) {
             seenUrls.add(r.url);
-            pagesToFetch.push(r);
+            const html = await fetchPage(r.url);
+            if (html) {
+              const handles = extractHandlesFromHtml(html, platform);
+              for (const handle of handles) {
+                if (!allHandles.has(handle)) {
+                  allHandles.set(handle, {
+                    name: prettifyHandle(handle),
+                    handle,
+                    platformHint: platform,
+                    profileUrl: platform === 'instagram'
+                      ? `https://instagram.com/${handle}`
+                      : `https://linkedin.com/in/${handle}`,
+                    websiteUrl: null,
+                    linkInBioUrl: null,
+                    sourceUrl: r.url,
+                    sourceTitle: r.title,
+                  });
+                }
+              }
+            }
           }
         }
       } catch (err) {
-        log.warn('web-search: Brave query failed', { query: query.slice(0, 50), error: String(err) });
+        log.warn('web-search: Brave query failed', { query: query.slice(0, 40), error: String(err) });
       }
-    }
-    log.info('web-search: Brave search done', { platform, pages: pagesToFetch.length });
-  } else {
-    // Fallback: use curated list pages (no API key needed)
-    pagesToFetch = platform === 'instagram' ? [...CURATED_IG_PAGES] : [...CURATED_LI_PAGES];
-    log.info('web-search: using curated list pages (no Brave API key)', { platform, pages: pagesToFetch.length });
-  }
-
-  // Fetch and parse pages
-  const allCandidates: ExtractedCandidate[] = [];
-  const seenHandles = new Set<string>();
-  let fetched = 0;
-
-  for (const page of pagesToFetch) {
-    if (fetched >= maxPagesToFetch) break;
-
-    try {
-      const html = await fetchPage(page.url);
-      if (!html) {
-        log.debug('web-search: page fetch returned empty', { url: page.url });
-        continue;
-      }
-      fetched++;
-
-      const candidates = extractCandidatesFromHtml(html, page.url, page.title);
-      for (const c of candidates) {
-        if (c.platformHint === platform && c.handle && !seenHandles.has(c.handle)) {
-          seenHandles.add(c.handle);
-          allCandidates.push(c);
-        }
-      }
-
-      log.debug('web-search: page parsed', { url: page.url, found: candidates.filter(c => c.platformHint === platform).length });
-    } catch (err) {
-      log.warn('web-search: page fetch failed', { url: page.url, error: String(err) });
     }
   }
 
-  log.info('web-search: extraction complete', { platform, candidates: allCandidates.length, pagesFetched: fetched, mode: hasBrave ? 'brave' : 'curated' });
-  return allCandidates;
+  const candidates = [...allHandles.values()];
+  log.info('web-search: complete', { platform, totalCandidates: candidates.length, mode: hasBrave ? 'brave+ddg' : 'ddg' });
+  return candidates;
 }

@@ -12,7 +12,8 @@ export interface VerificationResult {
   shouldStore: boolean;
 }
 
-const MIN_CONFIDENCE = parseFloat(process.env.WEB_SEARCH_MIN_CONFIDENCE || '0.40');
+// Lower threshold: a candidate with a direct profile URL (0.25) + trading source (0.10) = 0.35 passes
+const MIN_CONFIDENCE = parseFloat(process.env.WEB_SEARCH_MIN_CONFIDENCE || '0.25');
 
 /**
  * Score how confident we are that a candidate is a real, relevant creator.
