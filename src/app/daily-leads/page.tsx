@@ -140,7 +140,7 @@ function DailyLeadsContent() {
         <div className="flex items-center gap-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-3">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-400/30 border-t-blue-400" />
           <p className="text-sm text-blue-300">
-            Running discovery across YouTube and X. This may take a minute...
+            Searching the internet for the best leads for you...
           </p>
         </div>
       )}
