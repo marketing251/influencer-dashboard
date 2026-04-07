@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     has_discord: params.get('has_discord') === 'true' ? true : undefined,
     has_telegram: params.get('has_telegram') === 'true' ? true : undefined,
     promoting_prop_firms: params.get('promoting_prop_firms') === 'true' ? true : undefined,
+    new_today: params.get('new_today') === 'true' ? true : undefined,
     status: params.get('status') as CreatorFilters['status'] ?? undefined,
     search: params.get('search') || undefined,
     sort_by: (params.get('sort_by') as CreatorFilters['sort_by']) || 'lead_score',
@@ -36,9 +37,17 @@ export async function GET(request: NextRequest) {
   if (filters.promoting_prop_firms) query = query.eq('promoting_prop_firms', true);
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.search) query = query.ilike('name', `%${filters.search}%`);
-  if (filters.sort_by) {
-    query = query.order(filters.sort_by, { ascending: filters.sort_order === 'asc' });
+
+  // "New today" filter: first_seen_at starts with today's date
+  if (filters.new_today) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    query = query.gte('first_seen_at', todayStart.toISOString());
   }
+
+  // Sort — map 'followers' to actual column name
+  const sortColumn = filters.sort_by === 'followers' ? 'total_followers' : filters.sort_by ?? 'lead_score';
+  query = query.order(sortColumn, { ascending: filters.sort_order === 'asc' });
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

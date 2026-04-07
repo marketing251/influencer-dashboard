@@ -113,6 +113,7 @@ export interface CreatorFilters {
   has_discord?: boolean;
   has_telegram?: boolean;
   promoting_prop_firms?: boolean;
+  new_today?: boolean;
   status?: CreatorStatus;
   search?: string;
   sort_by?: 'lead_score' | 'followers' | 'created_at' | 'first_seen_at' | 'name';
