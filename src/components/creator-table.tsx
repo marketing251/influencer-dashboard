@@ -40,6 +40,7 @@ export function CreatorTable({ creators }: Props) {
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Platform</th>
             <th className="px-3 py-2.5 font-semibold border-b text-right" style={th}>Followers</th>
             <th className="px-3 py-2.5 font-semibold border-b text-right" style={th}>Score</th>
+            <th className="px-3 py-2.5 font-semibold border-b" style={th}>Email / Phone</th>
             <th className="px-3 py-2.5 font-semibold border-b text-center" style={th}>Contact</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Profiles</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Signals</th>
@@ -74,6 +75,19 @@ export function CreatorTable({ creators }: Props) {
                   <span className="font-mono font-semibold tabular-nums" style={{
                     color: c.lead_score >= 70 ? 'var(--accent-gold)' : c.lead_score >= 40 ? 'var(--accent)' : 'var(--text-muted)',
                   }}>{c.lead_score}</span>
+                </td>
+
+                {/* Email / Phone column */}
+                <td className="max-w-[180px] truncate px-3 py-2.5 text-[12px]">
+                  {c.public_email ? (
+                    <a href={`mailto:${c.public_email}`} className="hover:underline" style={{ color: 'var(--accent)' }}>{c.public_email}</a>
+                  ) : c.public_phone ? (
+                    <span style={{ color: 'var(--text-secondary)' }}>{c.public_phone}</span>
+                  ) : c.contact_form_url ? (
+                    <a href={c.contact_form_url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-muted)' }}>Contact Form</a>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)' }}>—</span>
+                  )}
                 </td>
 
                 <td className="px-3 py-2.5">

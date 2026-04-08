@@ -23,7 +23,7 @@ export interface DiscoverLeadsResult {
   started_at: string;
   completed_at: string;
   platforms: Record<string, PlatformResult>;
-  enrichment: { attempted: number; enriched: number; errors: number };
+  enrichment: { attempted: number; enriched: number; emails_found: number; phones_found: number; errors: number };
   /** Legacy accessors so existing UI code doesn't break. */
   youtube: PlatformResult;
   x: PlatformResult;
@@ -86,23 +86,40 @@ async function runProvider(provider: DiscoveryProvider): Promise<PlatformResult>
 
 // ─── Website enrichment ─────────────────────────────────────────────
 
-async function runEnrichment(maxCreators = 10): Promise<{ attempted: number; enriched: number; errors: number }> {
-  const stats = { attempted: 0, enriched: 0, errors: 0 };
+async function runEnrichment(maxCreators = 15): Promise<{ attempted: number; enriched: number; emails_found: number; phones_found: number; errors: number }> {
+  const stats = { attempted: 0, enriched: 0, emails_found: 0, phones_found: 0, errors: 0 };
   if (!isSupabaseConfigured()) return stats;
 
-  const { data: creatorsToEnrich } = await supabaseAdmin
+  // Priority 1: creators with websites but NO email (highest value enrichment)
+  const { data: needEmail } = await supabaseAdmin
     .from('creators')
-    .select('id, website, link_in_bio_url, public_email, instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, course_url, has_skool, has_whop, niche, primary_platform, prop_firms_mentioned')
+    .select('id, website, link_in_bio_url, public_email, public_phone, instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, course_url, contact_form_url, has_skool, has_whop, niche, primary_platform, prop_firms_mentioned')
     .not('website', 'is', null)
-    .order('lead_score', { ascending: false })
+    .is('public_email', null)
+    .order('total_followers', { ascending: false })
     .limit(maxCreators);
 
-  const needsEnrichment = (creatorsToEnrich ?? []).filter(c =>
-    !c.public_email || !c.instagram_url || !c.linkedin_url || !c.youtube_url || !c.x_url || !c.niche || !c.primary_platform,
-  );
-  if (!needsEnrichment.length) return stats;
+  // Priority 2: creators with email but missing other fields
+  const remaining = maxCreators - (needEmail?.length ?? 0);
+  let needOther: typeof needEmail = [];
+  if (remaining > 0) {
+    const { data } = await supabaseAdmin
+      .from('creators')
+      .select('id, website, link_in_bio_url, public_email, public_phone, instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, course_url, contact_form_url, has_skool, has_whop, niche, primary_platform, prop_firms_mentioned')
+      .not('website', 'is', null)
+      .not('public_email', 'is', null)
+      .or('instagram_url.is.null,linkedin_url.is.null,niche.is.null')
+      .order('lead_score', { ascending: false })
+      .limit(remaining);
+    needOther = data ?? [];
+  }
 
-  for (const creator of needsEnrichment) {
+  const allToEnrich = [...(needEmail ?? []), ...needOther];
+  if (!allToEnrich.length) return stats;
+
+  log.info('enrichment: starting', { total: allToEnrich.length, needEmail: needEmail?.length ?? 0, needOther: needOther.length });
+
+  for (const creator of allToEnrich) {
     stats.attempted++;
     try {
       // Step 1: Crawl website
@@ -146,9 +163,22 @@ async function runEnrichment(maxCreators = 10): Promise<{ attempted: number; enr
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       let changed = false;
 
-      // Contact info
-      if (enrichment.emails.length > 0 && !creator.public_email) { updates.public_email = enrichment.emails[0]; changed = true; }
-      if (enrichment.phones.length > 0) { updates.public_phone = enrichment.phones[0]; changed = true; }
+      // Contact info — highest priority enrichment
+      if (enrichment.emails.length > 0 && !creator.public_email) {
+        updates.public_email = enrichment.emails[0];
+        changed = true;
+        stats.emails_found++;
+      }
+      if (enrichment.phones.length > 0 && !creator.public_phone) {
+        updates.public_phone = enrichment.phones[0];
+        changed = true;
+        stats.phones_found++;
+      }
+      // Contact form URL from enrichment
+      if (enrichment.contact_form_url && !creator.contact_form_url) {
+        updates.contact_form_url = enrichment.contact_form_url;
+        changed = true;
+      }
 
       // Boolean signals
       if (enrichment.has_course) { updates.has_course = true; changed = true; }
@@ -259,7 +289,7 @@ function inferPrimaryPlatform(
  * 1. All configured API providers in parallel
  * 2. Website enrichment for creators missing email
  */
-export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs?: number }): Promise<DiscoverLeadsResult> {
+export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs?: number; enrichmentBudget?: number }): Promise<DiscoverLeadsResult> {
   const startedAt = new Date().toISOString();
   const providerTimeout = opts?.timeoutMs ?? 8_000; // 8s default fits Vercel Hobby 10s limit
   log.info('discoverLeads: started', { providerTimeout });
@@ -294,9 +324,10 @@ export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs
   }
 
   // Run enrichment only if not skipped (skip on Vercel Hobby to stay under 10s)
-  let enrichmentResult = { attempted: 0, enriched: 0, errors: 0 };
+  let enrichmentResult = { attempted: 0, enriched: 0, emails_found: 0, phones_found: 0, errors: 0 };
   if (!opts?.skipEnrichment) {
-    const { result: enrichment } = await withLogging('discoverLeads.enrichment', () => runEnrichment(3));
+    const budget = opts?.enrichmentBudget ?? 15;
+    const { result: enrichment } = await withLogging('discoverLeads.enrichment', () => runEnrichment(budget));
     if (enrichment) enrichmentResult = enrichment;
   }
 

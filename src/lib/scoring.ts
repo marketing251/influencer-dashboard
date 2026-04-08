@@ -19,9 +19,9 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   else if (total >= 10_000) score += 10;
   else if (total >= 1_000) score += 5;
 
-  // Contact info
-  if (creator.public_email) score += 15;
-  if (creator.public_phone) score += 5;
+  // Contact info — email is the #1 outreach signal
+  if (creator.public_email) score += 25;
+  if (creator.public_phone) score += 10;
   if (creator.website) score += 5;
 
   // Community / monetization

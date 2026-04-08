@@ -13,7 +13,7 @@ type RefreshStatus = 'idle' | 'running' | 'success' | 'error';
 
 interface RefreshStats {
   totalNew: number; totalUpdated: number; totalErrors: number;
-  skipped: string[]; enriched: number; timestamp: string;
+  skipped: string[]; enriched: number; emailsFound: number; phonesFound: number; timestamp: string;
 }
 
 function DailyLeadsContent() {
@@ -55,7 +55,9 @@ function DailyLeadsContent() {
         totalErrors += r.errors ?? 0;
       }
       const enriched = data.enrichment?.enriched ?? 0;
-      setRefreshStats({ totalNew, totalUpdated, totalErrors, skipped, enriched, timestamp: new Date().toLocaleTimeString() });
+      const emailsFound = data.enrichment?.emails_found ?? 0;
+      const phonesFound = data.enrichment?.phones_found ?? 0;
+      setRefreshStats({ totalNew, totalUpdated, totalErrors, skipped, enriched, emailsFound, phonesFound, timestamp: new Date().toLocaleTimeString() });
 
       if (totalNew + totalUpdated > 0) setRefreshStatus('success');
       else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} errors during discovery`); }
@@ -106,8 +108,10 @@ function DailyLeadsContent() {
       {refreshStatus === 'success' && refreshStats && (
         <StatusBanner type="success">
           <CheckIcon />
-          {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads found` : 'All leads up to date'}
+          {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads` : 'All leads up to date'}
           {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} updated`}
+          {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails found`}
+          {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones found`}
           {refreshStats.enriched > 0 && ` \u00b7 ${refreshStats.enriched} enriched`}
           {refreshStats.skipped.length > 0 && ` \u00b7 ${refreshStats.skipped.join(', ')} skipped`}
         </StatusBanner>

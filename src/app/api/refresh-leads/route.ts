@@ -2,16 +2,16 @@ import { NextResponse } from 'next/server';
 import { discoverLeads } from '@/lib/discover-leads';
 import { log } from '@/lib/logger';
 
-// Vercel Hobby: 10s max. Pro: up to 300s.
+// Vercel Hobby: 10s. Pro: up to 300s.
+// We need enrichment to extract emails, so allow full duration.
 export const maxDuration = 60;
 
 export async function POST() {
   try {
-    // Skip enrichment and use 8s timeout per provider to fit within Vercel limits.
-    // Enrichment runs separately via the daily cron job.
     const result = await discoverLeads({
-      skipEnrichment: true,
-      timeoutMs: 8_000,
+      skipEnrichment: false,  // MUST run enrichment to extract emails
+      timeoutMs: 8_000,       // per-provider timeout
+      enrichmentBudget: 15,   // enrich up to 15 creators per refresh
     });
     return NextResponse.json(result);
   } catch (err) {

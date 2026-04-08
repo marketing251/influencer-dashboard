@@ -145,8 +145,12 @@ function findSubPages(html: string, baseUrl: string): string[] {
   const subPages: string[] = [];
   const base = new URL(baseUrl);
 
-  // Common contact/about page patterns
-  const patterns = [/\/about/i, /\/contact/i, /\/connect/i, /\/links/i];
+  // Expanded sub-page patterns for better email extraction
+  const patterns = [
+    /\/contact/i, /\/about/i, /\/connect/i, /\/links/i,
+    /\/work-with-me/i, /\/business/i, /\/partnerships/i,
+    /\/sponsor/i, /\/inquir/i, /\/collab/i, /\/hire/i,
+  ];
 
   const hrefMatches = html.match(/href="([^"]+)"/g) ?? [];
   for (const href of hrefMatches) {
@@ -163,7 +167,7 @@ function findSubPages(html: string, baseUrl: string): string[] {
     }
   }
 
-  return subPages.slice(0, 3); // Limit sub-page crawls
+  return subPages.slice(0, 5); // Crawl up to 5 sub-pages for better email extraction
 }
 
 /**
@@ -227,7 +231,11 @@ export async function enrichFromWebsite(url: string): Promise<EnrichmentResult> 
   const allText = allHtml.map(htmlToText).join(' ');
   const allRawHtml = allHtml.join(' ');
 
-  result.emails = extractEmails(allText);
+  // Extract emails from text AND from mailto: links (more reliable)
+  const mailtoEmails = (allRawHtml.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi) ?? [])
+    .map(m => m.replace(/^mailto:/i, ''));
+  const textEmails = extractEmails(allText);
+  result.emails = [...new Set([...mailtoEmails, ...textEmails])].slice(0, 5);
   result.phones = extractPhones(allText);
   result.has_course = COURSE_INDICATORS.test(allText);
   result.has_discord = DISCORD_LINK.test(allRawHtml);
