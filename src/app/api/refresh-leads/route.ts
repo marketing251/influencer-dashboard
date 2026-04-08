@@ -9,9 +9,9 @@ export const maxDuration = 60;
 export async function POST() {
   try {
     const result = await discoverLeads({
-      skipEnrichment: false,  // MUST run enrichment to extract emails
-      timeoutMs: 8_000,       // per-provider timeout
-      enrichmentBudget: 15,   // enrich up to 15 creators per refresh
+      skipEnrichment: false,   // MUST run enrichment to extract emails
+      timeoutMs: 45_000,      // 45s per provider (YouTube needs time for 30 queries)
+      enrichmentBudget: 20,   // enrich up to 20 creators per refresh
     });
     return NextResponse.json(result);
   } catch (err) {

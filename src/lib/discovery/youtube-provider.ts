@@ -12,14 +12,12 @@ export const youtubeProvider: DiscoveryProvider = {
 
   async discover(): Promise<DiscoveryResult[]> {
     return discoverYouTubeCreators({
-      maxPerQuery: 3,           // 3 results per query (fast)
-      minSubscribers: 1_000,
-      fetchVideosAbove: 50_000, // only fetch videos for large channels
-      maxVideoFetches: 2,       // max 2 video fetches to stay fast
+      maxPerQuery: 10,          // 10 results per query (was 3)
+      minSubscribers: 500,      // lower threshold = more leads (was 1000)
     });
   },
 
   configHint() {
-    return 'Set YOUTUBE_API_KEY in environment variables. Get one at https://console.cloud.google.com (YouTube Data API v3).';
+    return 'Set YOUTUBE_API_KEY. Get one at https://console.cloud.google.com (YouTube Data API v3).';
   },
 };

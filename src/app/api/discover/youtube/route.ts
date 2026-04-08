@@ -21,10 +21,8 @@ export async function POST() {
   const { result: discoveries, error: discoverError, durationMs } = await withLogging(
     'api.discover.youtube',
     () => discoverYouTubeCreators({
-      maxPerQuery: 5,
-      minSubscribers: 1_000,
-      fetchVideosAbove: 10_000,
-      maxVideoFetches: 10,
+      maxPerQuery: 10,
+      minSubscribers: 500,
     }),
   );
 
