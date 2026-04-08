@@ -12,12 +12,13 @@ export const youtubeProvider: DiscoveryProvider = {
 
   async discover(): Promise<DiscoveryResult[]> {
     return discoverYouTubeCreators({
-      maxPerQuery: 10,          // 10 results per query (was 3)
-      minSubscribers: 500,      // lower threshold = more leads (was 1000)
+      maxPerQuery: 10,
+      minSubscribers: 500,
+      maxPages: 2,  // fetch page 2 for top queries
     });
   },
 
   configHint() {
-    return 'Set YOUTUBE_API_KEY. Get one at https://console.cloud.google.com (YouTube Data API v3).';
+    return 'Set YOUTUBE_API_KEY. Get one at console.cloud.google.com (YouTube Data API v3).';
   },
 };

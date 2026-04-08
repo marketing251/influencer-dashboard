@@ -342,7 +342,7 @@ export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs
   const completedAt = new Date().toISOString();
 
   // Compute summary across all providers
-  const TARGET = 100;
+  const TARGET = 500;
   let totalNew = 0, totalUpdated = 0, totalSkipped = 0, totalErrors = 0;
   for (const r of Object.values(platformResults)) {
     totalNew += r.new;
