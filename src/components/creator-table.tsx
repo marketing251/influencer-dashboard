@@ -21,10 +21,6 @@ const platformColor: Record<string, { bg: string; fg: string }> = {
 };
 const plLabel: Record<string, string> = { youtube:'YT', x:'X', instagram:'IG', linkedin:'LI', tiktok:'TT', discord:'DC', telegram:'TG', twitch:'TW' };
 
-function ContactDot({ has, title }: { has: boolean; title: string }) {
-  return has ? <span title={title} className="inline-block h-2 w-2 rounded-full" style={{ background: 'var(--accent-gold)' }} /> : null;
-}
-
 export function CreatorTable({ creators }: Props) {
   if (!creators.length) return null;
 
@@ -41,7 +37,6 @@ export function CreatorTable({ creators }: Props) {
             <th className="px-3 py-2.5 font-semibold border-b text-right" style={th}>Followers</th>
             <th className="px-3 py-2.5 font-semibold border-b text-right" style={th}>Score</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Email / Phone</th>
-            <th className="px-3 py-2.5 font-semibold border-b text-center" style={th}>Contact</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Profiles</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Signals</th>
             <th className="px-3 py-2.5 font-semibold border-b" style={th}>Prop Firms</th>
@@ -49,88 +44,108 @@ export function CreatorTable({ creators }: Props) {
           </tr>
         </thead>
         <tbody>
-          {creators.map(c => {
-            const primary = (c.accounts ?? []).length ? [...c.accounts].sort((a, b) => b.followers - a.followers)[0] : null;
-            return (
-              <tr key={c.id} className="transition-colors border-b" style={bd}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+          {creators.map(c => (
+            <tr key={c.id} className="transition-colors border-b" style={bd}
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
 
-                <td className="px-3 py-2.5">
-                  <Link href={`/creators/${c.id}`} className="font-medium hover:underline" style={{ color: 'var(--text-primary)' }}>{c.name}</Link>
-                </td>
+              {/* Creator name */}
+              <td className="px-3 py-2.5">
+                <Link href={`/creators/${c.id}`} className="font-medium hover:underline" style={{ color: 'var(--text-primary)' }}>{c.name}</Link>
+              </td>
 
-                <td className="px-3 py-2.5">
-                  <div className="flex gap-1">
-                    {(c.accounts ?? []).map(a => {
-                      const pc = platformColor[a.platform] ?? { bg: 'var(--bg-hover)', fg: 'var(--text-muted)' };
-                      return <span key={a.id} className="rounded px-1.5 py-[1px] text-[10px] font-bold" style={{ background: pc.bg, color: pc.fg }}>{plLabel[a.platform] ?? a.platform.slice(0,2).toUpperCase()}</span>;
-                    })}
+              {/* Platform badges */}
+              <td className="px-3 py-2.5">
+                <div className="flex gap-1">
+                  {(c.accounts ?? []).map(a => {
+                    const pc = platformColor[a.platform] ?? { bg: 'var(--bg-hover)', fg: 'var(--text-muted)' };
+                    return <span key={a.id} className="rounded px-1.5 py-[1px] text-[10px] font-bold" style={{ background: pc.bg, color: pc.fg }}>{plLabel[a.platform] ?? a.platform.slice(0,2).toUpperCase()}</span>;
+                  })}
+                </div>
+              </td>
+
+              {/* Followers */}
+              <td className="px-3 py-2.5 text-right font-mono tabular-nums" style={{ color: 'var(--text-secondary)' }}>{fmt(c.total_followers)}</td>
+
+              {/* Score */}
+              <td className="px-3 py-2.5 text-right">
+                <span className="font-mono font-semibold tabular-nums" style={{
+                  color: c.lead_score >= 70 ? 'var(--accent-gold)' : c.lead_score >= 40 ? 'var(--accent)' : 'var(--text-muted)',
+                }}>{c.lead_score}</span>
+              </td>
+
+              {/* Email / Phone — with contact type badge */}
+              <td className="px-3 py-2.5">
+                {c.public_email ? (
+                  <div className="flex items-center gap-1.5">
+                    <ContactBadge type="email" />
+                    <a href={`mailto:${c.public_email}`} className="truncate max-w-[160px] text-[12px] hover:underline" style={{ color: 'var(--accent)' }}>{c.public_email}</a>
                   </div>
-                </td>
-
-                <td className="px-3 py-2.5 text-right font-mono tabular-nums" style={{ color: 'var(--text-secondary)' }}>{fmt(c.total_followers)}</td>
-
-                <td className="px-3 py-2.5 text-right">
-                  <span className="font-mono font-semibold tabular-nums" style={{
-                    color: c.lead_score >= 70 ? 'var(--accent-gold)' : c.lead_score >= 40 ? 'var(--accent)' : 'var(--text-muted)',
-                  }}>{c.lead_score}</span>
-                </td>
-
-                {/* Email / Phone column */}
-                <td className="max-w-[180px] truncate px-3 py-2.5 text-[12px]">
-                  {c.public_email ? (
-                    <a href={`mailto:${c.public_email}`} className="hover:underline" style={{ color: 'var(--accent)' }}>{c.public_email}</a>
-                  ) : c.public_phone ? (
-                    <span style={{ color: 'var(--text-secondary)' }}>{c.public_phone}</span>
-                  ) : c.contact_form_url ? (
-                    <a href={c.contact_form_url} target="_blank" rel="noopener noreferrer" className="hover:underline" style={{ color: 'var(--text-muted)' }}>Contact Form</a>
-                  ) : (
-                    <span style={{ color: 'var(--text-muted)' }}>—</span>
-                  )}
-                </td>
-
-                <td className="px-3 py-2.5">
-                  <div className="flex justify-center gap-1.5">
-                    <ContactDot has={Boolean(c.public_email)} title="Email" />
-                    <ContactDot has={Boolean(c.public_phone)} title="Phone" />
-                    <ContactDot has={Boolean(c.contact_form_url)} title="Contact Form" />
-                    {!c.public_email && !c.public_phone && !c.contact_form_url && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>—</span>}
+                ) : c.public_phone ? (
+                  <div className="flex items-center gap-1.5">
+                    <ContactBadge type="phone" />
+                    <span className="text-[12px]" style={{ color: 'var(--text-secondary)' }}>{c.public_phone}</span>
                   </div>
-                </td>
-
-                <td className="px-3 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    <PLink url={c.youtube_url} label="YT" c={platformColor.youtube} />
-                    <PLink url={c.x_url} label="X" c={platformColor.x} />
-                    <PLink url={c.instagram_url} label="IG" c={platformColor.instagram} />
-                    <PLink url={c.linkedin_url} label="LI" c={platformColor.linkedin} />
-                    <PLink url={c.website} label="Web" c={{ bg: 'rgba(34,197,94,0.12)', fg: '#22c55e' }} />
+                ) : c.contact_form_url ? (
+                  <div className="flex items-center gap-1.5">
+                    <ContactBadge type="form" />
+                    <a href={c.contact_form_url} target="_blank" rel="noopener noreferrer" className="text-[12px] hover:underline" style={{ color: 'var(--text-muted)' }}>Contact Form</a>
                   </div>
-                </td>
+                ) : (
+                  <span className="text-[12px]" style={{ color: 'var(--text-muted)' }}>—</span>
+                )}
+              </td>
 
-                <td className="px-3 py-2.5">
-                  <div className="flex flex-wrap gap-1">
-                    {c.has_course && <Pill>Course</Pill>}
-                    {c.has_discord && <Pill>DC</Pill>}
-                    {c.has_telegram && <Pill>TG</Pill>}
-                    {c.has_skool && <Pill>Skool</Pill>}
-                    {c.has_whop && <Pill>Whop</Pill>}
-                    {c.promoting_prop_firms && <Pill gold>Prop</Pill>}
-                  </div>
-                </td>
+              {/* Social profile links */}
+              <td className="px-3 py-2.5">
+                <div className="flex flex-wrap gap-1">
+                  <PLink url={c.youtube_url} label="YT" c={platformColor.youtube} />
+                  <PLink url={c.x_url} label="X" c={platformColor.x} />
+                  <PLink url={c.instagram_url} label="IG" c={platformColor.instagram} />
+                  <PLink url={c.linkedin_url} label="LI" c={platformColor.linkedin} />
+                  <PLink url={c.website} label="Web" c={{ bg: 'rgba(34,197,94,0.12)', fg: '#22c55e' }} />
+                </div>
+              </td>
 
-                <td className="max-w-[100px] truncate px-3 py-2.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                  {(c.prop_firms_mentioned ?? []).join(', ') || ''}
-                </td>
+              {/* Signals */}
+              <td className="px-3 py-2.5">
+                <div className="flex flex-wrap gap-1">
+                  {c.has_course && <Pill>Course</Pill>}
+                  {c.has_discord && <Pill>DC</Pill>}
+                  {c.has_telegram && <Pill>TG</Pill>}
+                  {c.has_skool && <Pill>Skool</Pill>}
+                  {c.has_whop && <Pill>Whop</Pill>}
+                  {c.promoting_prop_firms && <Pill gold>Prop</Pill>}
+                </div>
+              </td>
 
-                <td className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{relDate(c.first_seen_at)}</td>
-              </tr>
-            );
-          })}
+              {/* Prop firms */}
+              <td className="max-w-[100px] truncate px-3 py-2.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                {(c.prop_firms_mentioned ?? []).join(', ') || ''}
+              </td>
+
+              {/* First seen */}
+              <td className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--text-muted)' }}>{relDate(c.first_seen_at)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ─── Sub-components ─────────────────────────────────────────────────
+
+function ContactBadge({ type }: { type: 'email' | 'phone' | 'form' }) {
+  const config = {
+    email: { label: 'Email', bg: 'rgba(34,197,94,0.12)', fg: '#22c55e' },
+    phone: { label: 'Phone', bg: 'rgba(59,130,246,0.12)', fg: '#3b82f6' },
+    form: { label: 'Form', bg: 'var(--accent-gold-dim)', fg: 'var(--accent-gold)' },
+  };
+  const { label, bg, fg } = config[type];
+  return (
+    <span className="shrink-0 rounded px-1.5 py-[1px] text-[9px] font-bold uppercase tracking-wider"
+      style={{ background: bg, color: fg }}>{label}</span>
   );
 }
 
