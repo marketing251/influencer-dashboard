@@ -104,7 +104,7 @@ function DailyLeadsContent() {
         </div>
         <div className="flex items-center gap-3">
           <button onClick={handleRefresh} disabled={refreshStatus === 'running'}
-            className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition-all disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold transition-all disabled:opacity-60"
             style={{ background: 'var(--accent-gold)', color: '#07101D', boxShadow: '0 2px 12px rgba(242,205,122,0.3)' }}>
             <svg className={`h-4 w-4 ${refreshStatus === 'running' ? 'animate-spin' : ''}`}
               fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

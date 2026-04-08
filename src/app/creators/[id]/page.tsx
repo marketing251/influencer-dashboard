@@ -5,16 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { CreatorDetail } from '@/lib/types';
 
-const statusColors: Record<string, string> = {
-  new: 'bg-blue-500/20 text-blue-400',
-  contacted: 'bg-amber-500/20 text-amber-400',
-  replied: 'bg-green-500/20 text-green-400',
-  qualified: 'bg-purple-500/20 text-purple-400',
-  rejected: 'bg-red-500/20 text-red-400',
-  converted: 'bg-emerald-500/20 text-emerald-400',
-};
-
-function formatFollowers(n: number) {
+function fmt(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
   return String(n);
@@ -26,53 +17,46 @@ export default function CreatorDetailPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`/api/creators/${id}`)
-      .then(r => r.json())
-      .then(data => {
-        setCreator(data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+    fetch(`/api/creators/${id}`).then(r => r.json()).then(data => { setCreator(data); setLoading(false); }).catch(() => setLoading(false));
   }, [id]);
 
-  if (loading) return <div className="py-12 text-center text-zinc-500">Loading...</div>;
-  if (!creator) return <div className="py-12 text-center text-zinc-500">Creator not found.</div>;
+  if (loading) return (
+    <div className="flex items-center justify-center py-20">
+      <div className="h-8 w-8 animate-spin rounded-full border-2" style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+    </div>
+  );
+  if (!creator) return <div className="py-20 text-center" style={{ color: 'var(--text-muted)' }}>Creator not found.</div>;
 
   return (
     <div className="space-y-8">
-      {/* Header */}
+      {/* Back + Header */}
       <div>
-        <Link href="/daily-leads" className="text-sm text-zinc-500 hover:text-zinc-300">
-          &larr; Back to leads
-        </Link>
-        <div className="mt-2 flex items-center gap-4">
-          <h1 className="text-2xl font-bold text-white">{creator.name}</h1>
-          <span className={`rounded-full px-3 py-1 text-sm font-medium ${statusColors[creator.status]}`}>
-            {creator.status}
-          </span>
-          <span className="rounded-full bg-amber-500/20 px-3 py-1 text-sm font-medium text-amber-400">
-            Score: {creator.lead_score}
-          </span>
-          <span className="text-sm text-zinc-500">
-            Confidence: {creator.confidence_score}%
-          </span>
+        <Link href="/daily-leads" className="text-sm hover:underline" style={{ color: 'var(--text-muted)' }}>&larr; Back to leads</Link>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>{creator.name}</h1>
+          <Badge bg="var(--accent)" fg="#fff">{creator.status}</Badge>
+          <Badge bg="var(--accent-gold-dim)" fg="var(--accent-gold)">Score: {creator.lead_score}</Badge>
+          <span className="text-sm" style={{ color: 'var(--text-muted)' }}>Confidence: {creator.confidence_score}%</span>
+          {creator.niche && <Badge bg="var(--bg-hover)" fg="var(--text-secondary)">{creator.niche}</Badge>}
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Info Panel */}
+        {/* Left column */}
         <div className="space-y-4 lg:col-span-1">
           <Section title="Contact">
             <Field label="Website" value={creator.website} link />
             <Field label="Email" value={creator.public_email} />
             <Field label="Phone" value={creator.public_phone} />
+            <Field label="Contact Form" value={creator.contact_form_url} link />
           </Section>
 
           <Section title="Stats">
-            <Field label="Total Followers" value={formatFollowers(creator.total_followers)} />
-            <Field label="Niche" value={creator.niche} />
+            <Field label="Total Followers" value={fmt(creator.total_followers)} />
             <Field label="Primary Platform" value={creator.primary_platform} />
+            <Field label="Niche" value={creator.niche} />
             <Field label="Source" value={creator.source_type} />
+            <Field label="First Seen" value={creator.first_seen_at ? new Date(creator.first_seen_at).toLocaleDateString() : null} />
           </Section>
 
           <Section title="Profiles">
@@ -87,77 +71,65 @@ export default function CreatorDetailPage() {
           </Section>
 
           <Section title="Signals">
-            <Field label="Has Course" value={creator.has_course ? 'Yes' : 'No'} />
-            <Field label="Has Discord" value={creator.has_discord ? 'Yes' : 'No'} />
-            <Field label="Has Telegram" value={creator.has_telegram ? 'Yes' : 'No'} />
-            <Field label="Has Skool" value={creator.has_skool ? 'Yes' : 'No'} />
-            <Field label="Has Whop" value={creator.has_whop ? 'Yes' : 'No'} />
-            <Field label="Prop Firms" value={creator.promoting_prop_firms ? 'Yes' : 'No'} />
+            <div className="flex flex-wrap gap-1.5">
+              {creator.has_course && <Pill>Course</Pill>}
+              {creator.has_discord && <Pill>Discord</Pill>}
+              {creator.has_telegram && <Pill>Telegram</Pill>}
+              {creator.has_skool && <Pill>Skool</Pill>}
+              {creator.has_whop && <Pill>Whop</Pill>}
+              {creator.promoting_prop_firms && <Pill gold>Prop Firms</Pill>}
+            </div>
           </Section>
 
-          {creator.prop_firms_mentioned.length > 0 && (
+          {(creator.prop_firms_mentioned ?? []).length > 0 && (
             <Section title="Prop Firms Mentioned">
               <div className="flex flex-wrap gap-1.5">
-                {creator.prop_firms_mentioned.map(f => (
-                  <span key={f} className="rounded bg-green-500/20 px-2 py-0.5 text-xs text-green-400">
-                    {f}
-                  </span>
-                ))}
+                {creator.prop_firms_mentioned.map(f => <Pill key={f} gold>{f}</Pill>)}
               </div>
-            </Section>
-          )}
-
-          {creator.notes && (
-            <Section title="Notes">
-              <p className="text-sm text-zinc-400">{creator.notes}</p>
             </Section>
           )}
         </div>
 
-        {/* Accounts & Posts */}
+        {/* Right column */}
         <div className="space-y-6 lg:col-span-2">
           <Section title="Social Accounts">
-            <div className="space-y-2">
-              {creator.accounts.map(acc => (
-                <div key={acc.id} className="flex items-center justify-between rounded bg-zinc-800/50 px-3 py-2">
-                  <div className="flex items-center gap-3">
-                    <span className="rounded bg-zinc-700 px-2 py-0.5 text-xs font-bold capitalize text-zinc-300">
-                      {acc.platform}
-                    </span>
-                    <span className="text-sm text-white">@{acc.handle}</span>
-                    {acc.verified && <span className="text-xs text-blue-400">Verified</span>}
+            {(creator.accounts ?? []).length > 0 ? (
+              <div className="space-y-2">
+                {creator.accounts.map(acc => (
+                  <div key={acc.id} className="flex items-center justify-between rounded-lg px-3 py-2"
+                    style={{ background: 'var(--bg-hover)' }}>
+                    <div className="flex items-center gap-3">
+                      <span className="rounded px-2 py-0.5 text-xs font-bold capitalize"
+                        style={{ background: 'var(--accent-gold-dim)', color: 'var(--accent-gold)' }}>{acc.platform}</span>
+                      <span className="text-sm" style={{ color: 'var(--text-primary)' }}>@{acc.handle}</span>
+                      {acc.verified && <span className="text-xs" style={{ color: 'var(--accent)' }}>Verified</span>}
+                    </div>
+                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>{fmt(acc.followers)}</div>
                   </div>
-                  <div className="text-sm text-zinc-400">{formatFollowers(acc.followers)}</div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No linked accounts</p>
+            )}
           </Section>
 
           {creator.posts && creator.posts.length > 0 && (
             <Section title="Recent Posts">
               <div className="space-y-2">
                 {creator.posts.map(post => (
-                  <div key={post.id} className="rounded border border-zinc-800 bg-zinc-900/50 p-3">
-                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                  <div key={post.id} className="rounded-lg p-3" style={{ background: 'var(--bg-hover)', border: '1px solid var(--border-subtle)' }}>
+                    <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                       <span className="capitalize">{post.platform}</span>
-                      {post.published_at && (
-                        <span>{new Date(post.published_at).toLocaleDateString()}</span>
-                      )}
-                      {post.mentions_prop_firm && (
-                        <span className="rounded bg-green-500/20 px-1.5 text-green-400">Prop Firm</span>
-                      )}
-                      {post.mentions_course && (
-                        <span className="rounded bg-purple-500/20 px-1.5 text-purple-400">Course</span>
-                      )}
+                      {post.published_at && <span>{new Date(post.published_at).toLocaleDateString()}</span>}
+                      {post.mentions_prop_firm && <Pill gold>Prop Firm</Pill>}
+                      {post.mentions_course && <Pill>Course</Pill>}
                     </div>
-                    {post.title && <p className="mt-1 text-sm font-medium text-white">{post.title}</p>}
-                    {post.content_snippet && (
-                      <p className="mt-1 text-sm text-zinc-400">{post.content_snippet}</p>
-                    )}
-                    <div className="mt-2 flex gap-4 text-xs text-zinc-600">
-                      <span>{formatFollowers(post.views)} views</span>
-                      <span>{formatFollowers(post.likes)} likes</span>
-                      <span>{formatFollowers(post.comments)} comments</span>
+                    {post.title && <p className="mt-1 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{post.title}</p>}
+                    {post.content_snippet && <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>{post.content_snippet}</p>}
+                    <div className="mt-2 flex gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <span>{fmt(post.views)} views</span>
+                      <span>{fmt(post.likes)} likes</span>
+                      <span>{fmt(post.comments)} comments</span>
                     </div>
                   </div>
                 ))}
@@ -169,14 +141,13 @@ export default function CreatorDetailPage() {
             <Section title="Outreach History">
               <div className="space-y-2">
                 {creator.outreach_history.map(o => (
-                  <div key={o.id} className="flex items-center justify-between rounded bg-zinc-800/50 px-3 py-2">
+                  <div key={o.id} className="flex items-center justify-between rounded-lg px-3 py-2"
+                    style={{ background: 'var(--bg-hover)' }}>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm capitalize text-zinc-400">{o.channel}</span>
-                      <span className="text-sm text-zinc-300">{o.subject || '(no subject)'}</span>
+                      <span className="text-sm capitalize" style={{ color: 'var(--text-secondary)' }}>{o.channel}</span>
+                      <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{o.subject || '(no subject)'}</span>
                     </div>
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[o.status] || 'text-zinc-400'}`}>
-                      {o.status}
-                    </span>
+                    <Badge bg="var(--bg-hover)" fg="var(--text-secondary)">{o.status}</Badge>
                   </div>
                 ))}
               </div>
@@ -190,8 +161,8 @@ export default function CreatorDetailPage() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-      <h3 className="mb-3 text-sm font-medium text-zinc-400">{title}</h3>
+    <div className="rounded-xl p-5" style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
+      <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{title}</h3>
       {children}
     </div>
   );
@@ -199,17 +170,30 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Field({ label, value, link }: { label: string; value: string | null; link?: boolean }) {
   return (
-    <div className="flex items-center justify-between py-1">
-      <span className="text-sm text-zinc-500">{label}</span>
+    <div className="flex items-center justify-between py-1.5 border-b" style={{ borderColor: 'var(--border-subtle)' }}>
+      <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{label}</span>
       {value ? (
         link ? (
-          <span className="text-sm text-blue-400">{value}</span>
+          <a href={value} target="_blank" rel="noopener noreferrer" className="text-sm truncate max-w-[200px] hover:underline" style={{ color: 'var(--accent)' }}>{value.replace(/^https?:\/\/(www\.)?/, '').slice(0, 40)}</a>
         ) : (
-          <span className="text-sm text-zinc-300">{value}</span>
+          <span className="text-sm" style={{ color: 'var(--text-primary)' }}>{value}</span>
         )
       ) : (
-        <span className="text-sm text-zinc-700">—</span>
+        <span className="text-sm" style={{ color: 'var(--text-muted)' }}>—</span>
       )}
     </div>
+  );
+}
+
+function Badge({ children, bg, fg }: { children: React.ReactNode; bg: string; fg: string }) {
+  return <span className="rounded-full px-2.5 py-0.5 text-xs font-medium" style={{ background: bg, color: fg }}>{children}</span>;
+}
+
+function Pill({ children, gold }: { children: React.ReactNode; gold?: boolean }) {
+  return (
+    <span className="rounded-full px-2.5 py-0.5 text-xs font-medium"
+      style={{ background: gold ? 'var(--accent-gold-dim)' : 'var(--bg-hover)', color: gold ? 'var(--accent-gold)' : 'var(--text-secondary)' }}>
+      {children}
+    </span>
   );
 }
