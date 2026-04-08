@@ -15,6 +15,7 @@ export async function GET(
     .from('creators')
     .select('*, creator_accounts(*), creator_posts(*), outreach(*)')
     .eq('id', id)
+    .neq('excluded_from_leads', true)  // never expose excluded leads
     .single();
 
   if (error || !creator) {
@@ -26,5 +27,6 @@ export async function GET(
     accounts: creator.creator_accounts ?? [],
     posts: creator.creator_posts ?? [],
     outreach_history: creator.outreach ?? [],
+    prop_firms_mentioned: creator.prop_firms_mentioned ?? [],
   });
 }
