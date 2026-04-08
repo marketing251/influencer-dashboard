@@ -41,64 +41,57 @@ function DailyLeadsContent() {
   const handleRefresh = async () => {
     setRefreshStatus('running');
     setRefreshError('');
-    try {
-      const res = await fetch('/api/refresh-leads', { method: 'POST' });
-      let data;
+
+    // Run discovery in 4 sequential batches, each within Vercel 10s limit
+    const batches = ['seeds_ig', 'seeds_li', 'youtube', 'enrich'];
+    const sources: { name: string; discovered: number; inserted: number }[] = [];
+    let totalNew = 0, totalUpdated = 0, totalErrors = 0, attempted = 0;
+    let emailsFound = 0, phonesFound = 0;
+
+    for (const batch of batches) {
       try {
-        data = await res.json();
-      } catch {
-        // Server returned non-JSON (likely Vercel timeout HTML page)
-        setRefreshStatus('error');
-        setRefreshError(res.status === 504 || res.status === 502
-          ? 'Request timed out — Vercel Hobby has a 10s limit. Try upgrading to Pro for longer refreshes.'
-          : `Server returned invalid response (${res.status}). The refresh may still be running — check back in a moment.`);
-        setTimeout(() => fetchCreators(), 5000); // refresh table in case data was partially saved
-        return;
-      }
-      if (!res.ok) { setRefreshStatus('error'); setRefreshError(data.error ?? `Failed (${res.status})`); return; }
+        const res = await fetch(`/api/refresh-leads/batch?type=${batch}`, { method: 'POST' });
+        let data;
+        try { data = await res.json(); } catch { continue; } // skip non-JSON responses
+        if (!res.ok) { totalErrors++; continue; }
 
-      const s = data.summary ?? {};
-      const totalNew = s.total_new ?? 0;
-      const totalUpdated = s.total_updated ?? 0;
-      const totalSkipped = s.total_skipped ?? 0;
-      const totalErrors = s.total_errors ?? 0;
-      const targetReached = s.target_reached ?? false;
-      const target = s.target ?? 100;
-      const reason = s.reason ?? '';
-
-      const enriched = data.enrichment?.enriched ?? 0;
-      const emailsFound = data.enrichment?.emails_found ?? 0;
-      const phonesFound = data.enrichment?.phones_found ?? 0;
-
-      // Per-source breakdown
-      const sources: { name: string; discovered: number; inserted: number }[] = [];
-      let attempted = 0;
-      for (const [name, result] of Object.entries(data.platforms ?? {})) {
-        const r = result as { discovered?: number; new?: number; skippedReason?: string } | null;
-        if (!r || r.skippedReason) continue;
-        const disc = r.discovered ?? 0;
-        const ins = r.new ?? 0;
+        const disc = data.discovered ?? data.attempted ?? 0;
+        const ins = data.new ?? 0;
+        const upd = data.updated ?? 0;
         attempted += disc;
-        if (disc > 0) sources.push({ name, discovered: disc, inserted: ins });
+        totalNew += ins;
+        totalUpdated += upd;
+        if (data.errors) totalErrors += typeof data.errors === 'number' ? data.errors : 0;
+        if (data.emails) emailsFound += data.emails;
+        if (data.phones) phonesFound += data.phones;
+        if (disc > 0 || ins > 0) sources.push({ name: batch, discovered: disc, inserted: ins });
+      } catch {
+        totalErrors++;
       }
-
-      setRefreshStats({
-        totalNew, totalUpdated, totalSkipped, totalErrors,
-        attempted, target, targetReached, reason,
-        enriched, emailsFound, phonesFound, sources,
-        timestamp: new Date().toLocaleTimeString(),
-      });
-
-      if (totalNew + totalUpdated > 0) setRefreshStatus('success');
-      else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} errors`); }
-      else setRefreshStatus('success');
-
-      fetchCreators();
-      setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 10000);
-    } catch (err) {
-      setRefreshStatus('error');
-      setRefreshError(err instanceof Error ? err.message : 'Network error');
     }
+
+    const target = 500;
+    const targetReached = totalNew >= target;
+    let reason = '';
+    if (!targetReached) {
+      if (attempted === 0) reason = 'No sources returned results — check API keys';
+      else if (totalNew === 0) reason = `All ${attempted} candidates were duplicates`;
+      else reason = `Found ${attempted} candidates, ${totalNew} were new (rest already in DB)`;
+    }
+
+    setRefreshStats({
+      totalNew, totalUpdated, totalSkipped: 0, totalErrors,
+      attempted, target, targetReached, reason,
+      enriched: 0, emailsFound, phonesFound, sources,
+      timestamp: new Date().toLocaleTimeString(),
+    });
+
+    if (totalNew + totalUpdated > 0) setRefreshStatus('success');
+    else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} batch errors`); }
+    else setRefreshStatus('success');
+
+    fetchCreators();
+    setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 12000);
   };
 
   return (
