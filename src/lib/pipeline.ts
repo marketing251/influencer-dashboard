@@ -12,6 +12,8 @@ import type { Platform } from './types';
 
 // ─── Text analysis ──────────────────────────────────────────────────
 
+import { classifyPropFirm } from './prop-firm-classifier';
+
 const COURSE_PATTERN = /\b(?:course|mentor(?:ship)?|academy|learn|enroll|program|masterclass|bootcamp|curriculum|coaching|training|workshop|certification)\b/i;
 const DISCORD_PATTERN = /discord\.(?:gg|com\/invite)\//i;
 const TELEGRAM_PATTERN = /t\.me\//i;
@@ -152,6 +154,13 @@ export async function upsertCreator(
     if (!hasContactPath(data)) {
       log.info('pipeline.upsert: rejected (no contact path)', { name: data.name, platform: data.account.platform });
       return { action: 'skipped', creator_id: null, name: data.name, error: 'no_contact_path' };
+    }
+
+    // Prop firm exclusion: reject actual prop firms (we sell TO them, not prospect them)
+    const firmCheck = classifyPropFirm({ name: data.name, slug: data.slug, website: data.website, bio: data.bio });
+    if (firmCheck.is_prop_firm) {
+      log.info('pipeline.upsert: excluded (prop firm)', { name: data.name, confidence: firmCheck.confidence, reasons: firmCheck.reasons });
+      return { action: 'skipped', creator_id: null, name: data.name, error: 'is_prop_firm' };
     }
 
     return await createNewCreator(data, posts, signals, now);

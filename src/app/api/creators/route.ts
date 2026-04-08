@@ -34,6 +34,10 @@ export async function GET(request: NextRequest) {
 
   let query = supabase.from('creators').select('*, creator_accounts(*)');
 
+  // Exclude prop firms from leads list (we sell to them, not prospect them)
+  query = query.or('is_prop_firm.is.null,is_prop_firm.eq.false');
+  query = query.or('excluded_from_leads.is.null,excluded_from_leads.eq.false');
+
   if (filters.platform) query = query.contains('creator_accounts.platform', [filters.platform]);
   if (filters.min_followers) query = query.gte('total_followers', filters.min_followers);
   if (filters.max_followers) query = query.lte('total_followers', filters.max_followers);

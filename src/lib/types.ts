@@ -32,6 +32,8 @@ export interface Creator {
   primary_platform: string | null;
   source_type: string | null;
   source_url: string | null;
+  is_prop_firm: boolean;
+  excluded_from_leads: boolean;
   lead_score: number;
   confidence_score: number;
   notes: string | null;

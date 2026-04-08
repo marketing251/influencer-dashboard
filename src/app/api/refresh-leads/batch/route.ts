@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
 
 async function runSeeds(platform: 'instagram' | 'linkedin') {
   const candidates = await discoverViaWebSearch({ platform });
-  let newCount = 0, updated = 0, errors = 0, rejected = 0;
+  let newCount = 0, updated = 0, errors = 0, rejected = 0, excludedPropFirm = 0;
 
   // Verify and upsert each candidate
   for (const candidate of candidates) {
@@ -80,12 +80,13 @@ async function runSeeds(platform: 'instagram' | 'linkedin') {
     else if (result.action === 'updated') updated++;
     else if (result.action === 'skipped') {
       if (result.error === 'no_contact_path') rejected++;
+      else if (result.error === 'is_prop_firm') excludedPropFirm++;
       else errors++;
     }
   }
 
-  log.info('batch.seeds: done', { platform, candidates: candidates.length, new: newCount, updated, rejected });
-  return { batch: `seeds_${platform}`, discovered: candidates.length, new: newCount, updated, rejected, errors };
+  log.info('batch.seeds: done', { platform, candidates: candidates.length, new: newCount, updated, rejected, excludedPropFirm });
+  return { batch: `seeds_${platform}`, discovered: candidates.length, new: newCount, updated, rejected, excluded_prop_firm: excludedPropFirm, errors };
 }
 
 // ─── YouTube (API calls — fits in ~8s for 15 queries) ────────────────
@@ -96,19 +97,22 @@ async function runYouTube() {
   }
 
   const discoveries = await discoverYouTubeCreators({ maxPerQuery: 10, minSubscribers: 500, maxPages: 1 });
-  let newCount = 0, updated = 0, errors = 0, rejected = 0;
+  let newCount = 0, updated = 0, errors = 0, rejected = 0, excludedPropFirm = 0;
 
   for (const { creator, posts } of discoveries) {
     const result = await upsertCreator(creator, posts);
     if (result.action === 'created') newCount++;
     else if (result.action === 'updated') updated++;
-    else if (result.action === 'skipped' && result.error === 'no_contact_path') rejected++;
-    else if (result.error) errors++;
+    else if (result.action === 'skipped') {
+      if (result.error === 'no_contact_path') rejected++;
+      else if (result.error === 'is_prop_firm') excludedPropFirm++;
+      else errors++;
+    }
   }
 
   await logDiscoveryRun('youtube', newCount, updated, [], 'completed');
-  log.info('batch.youtube: done', { discovered: discoveries.length, new: newCount, updated, rejected });
-  return { batch: 'youtube', discovered: discoveries.length, new: newCount, updated, rejected, errors };
+  log.info('batch.youtube: done', { discovered: discoveries.length, new: newCount, updated, rejected, excludedPropFirm });
+  return { batch: 'youtube', discovered: discoveries.length, new: newCount, updated, rejected, excluded_prop_firm: excludedPropFirm, errors };
 }
 
 // ─── Enrich (crawl websites for emails) ──────────────────────────────

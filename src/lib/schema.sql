@@ -32,6 +32,8 @@ CREATE TABLE creators (
   primary_platform TEXT,
   source_type TEXT,
   source_url TEXT,
+  is_prop_firm BOOLEAN DEFAULT FALSE,
+  excluded_from_leads BOOLEAN DEFAULT FALSE,
   lead_score REAL DEFAULT 0,
   confidence_score REAL DEFAULT 0,
   notes TEXT,
