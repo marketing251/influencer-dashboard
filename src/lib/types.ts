@@ -25,6 +25,7 @@ export interface Creator {
   x_url: string | null;
   link_in_bio_url: string | null;
   course_url: string | null;
+  contact_form_url: string | null;
   discord_url: string | null;
   telegram_url: string | null;
   niche: string | null;
@@ -131,6 +132,10 @@ export interface CreatorFilters {
   has_instagram?: boolean;
   has_linkedin?: boolean;
   has_website?: boolean;
+  has_email?: boolean;
+  has_phone?: boolean;
+  has_contact_form?: boolean;
+  has_any_contact?: boolean;
   high_confidence?: boolean;
   new_today?: boolean;
   status?: CreatorStatus;

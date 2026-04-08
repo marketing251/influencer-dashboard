@@ -40,6 +40,9 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   const urlCount = urls.filter(Boolean).length;
   score += urlCount * 3; // max +12
 
+  // Contact form (high-value — means they accept business inquiries)
+  if (creator.contact_form_url) score += 10;
+
   // Direct URLs (higher signal than booleans)
   if (creator.course_url) score += 3;
   if (creator.link_in_bio_url) score += 2;

@@ -12,6 +12,7 @@ import { detectPropFirmsFromSources, extractPropFirmNames } from '../prop-firms'
 export interface EnrichmentResult {
   emails: string[];
   phones: string[];
+  contact_form_url: string | null;
   has_course: boolean;
   has_discord: boolean;
   has_telegram: boolean;
@@ -173,6 +174,7 @@ export async function enrichFromWebsite(url: string): Promise<EnrichmentResult> 
   const result: EnrichmentResult = {
     emails: [],
     phones: [],
+    contact_form_url: null,
     has_course: false,
     has_discord: false,
     has_telegram: false,
@@ -210,6 +212,10 @@ export async function enrichFromWebsite(url: string): Promise<EnrichmentResult> 
   const allHtml = [rootHtml];
 
   for (const subUrl of subPages) {
+    // Detect contact pages
+    if (/\/contact/i.test(subUrl) && !result.contact_form_url) {
+      result.contact_form_url = subUrl;
+    }
     const html = await fetchPage(subUrl);
     if (html) {
       allHtml.push(html);

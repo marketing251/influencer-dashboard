@@ -18,6 +18,10 @@ export async function GET(request: NextRequest) {
     has_instagram: params.get('has_instagram') === 'true' ? true : undefined,
     has_linkedin: params.get('has_linkedin') === 'true' ? true : undefined,
     has_website: params.get('has_website') === 'true' ? true : undefined,
+    has_email: params.get('has_email') === 'true' ? true : undefined,
+    has_phone: params.get('has_phone') === 'true' ? true : undefined,
+    has_contact_form: params.get('has_contact_form') === 'true' ? true : undefined,
+    has_any_contact: params.get('has_any_contact') === 'true' ? true : undefined,
     high_confidence: params.get('high_confidence') === 'true' ? true : undefined,
     new_today: params.get('new_today') === 'true' ? true : undefined,
     status: params.get('status') as CreatorFilters['status'] ?? undefined,
@@ -42,6 +46,10 @@ export async function GET(request: NextRequest) {
   if (filters.has_instagram) query = query.not('instagram_url', 'is', null);
   if (filters.has_linkedin) query = query.not('linkedin_url', 'is', null);
   if (filters.has_website) query = query.not('website', 'is', null);
+  if (filters.has_email) query = query.not('public_email', 'is', null);
+  if (filters.has_phone) query = query.not('public_phone', 'is', null);
+  if (filters.has_contact_form) query = query.not('contact_form_url', 'is', null);
+  if (filters.has_any_contact) query = query.or('public_email.not.is.null,public_phone.not.is.null,contact_form_url.not.is.null');
   if (filters.high_confidence) query = query.gte('confidence_score', 70);
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.search) query = query.ilike('name', `%${filters.search}%`);

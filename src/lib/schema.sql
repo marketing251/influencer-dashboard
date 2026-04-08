@@ -23,6 +23,7 @@ CREATE TABLE creators (
   x_url TEXT,
   link_in_bio_url TEXT,
   course_url TEXT,
+  contact_form_url TEXT,
   discord_url TEXT,
   telegram_url TEXT,
   has_skool BOOLEAN DEFAULT FALSE,

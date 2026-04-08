@@ -68,6 +68,22 @@ export interface UpsertResult {
 
 // ─── Core upsert ────────────────────────────────────────────────────
 
+/**
+ * Contact qualification: a lead must have at least one contact path.
+ * Leads with zero contact paths are rejected before insert.
+ */
+function hasContactPath(data: DiscoveredCreator, signals: ReturnType<typeof analyzeText>): boolean {
+  // Has a website (which may have a contact page)
+  if (data.website) return true;
+  // Has an email detected in bio/description
+  if (signals.course_url) return true; // course implies website
+  // Seed data with known websites pass
+  if (data.source_type === 'seed') return true;
+  // YouTube/X API sources always have profile URLs (which are contactable)
+  if (data.source_type === 'youtube_api' || data.source_type === 'x_api') return true;
+  return false;
+}
+
 export async function upsertCreator(
   data: DiscoveredCreator,
   posts?: DiscoveredPost[],
@@ -128,9 +144,15 @@ export async function upsertCreator(
 
     if (existing) {
       return await updateExistingCreator(existing, data, posts, signals, now);
-    } else {
-      return await createNewCreator(data, posts, signals, now);
     }
+
+    // Contact qualification: reject leads without any contact path
+    if (!hasContactPath(data, signals)) {
+      log.info('pipeline.upsert: rejected (no contact path)', { name: data.name, platform: data.account.platform });
+      return { action: 'skipped', creator_id: null, name: data.name, error: 'no_contact_path' };
+    }
+
+    return await createNewCreator(data, posts, signals, now);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error('pipeline.upsertCreator: exception', { name: data.name, error: msg });
@@ -194,6 +216,7 @@ async function updateExistingCreator(
     telegram_url: mergeUrl(current.telegram_url, signals.telegram_url),
     link_in_bio_url: mergeUrl(current.link_in_bio_url, signals.link_in_bio_url),
     course_url: mergeUrl(current.course_url, signals.course_url),
+    contact_form_url: current.contact_form_url || null,
     source_type: current.source_type || data.source_type || null,
     source_url: current.source_url || data.source_url || null,
   };

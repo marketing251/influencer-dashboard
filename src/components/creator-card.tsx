@@ -5,24 +5,9 @@ interface Props {
   creator: Creator & { accounts: CreatorAccount[] };
 }
 
-const statusColors: Record<string, string> = {
-  new: 'bg-blue-500/20 text-blue-400',
-  contacted: 'bg-amber-500/20 text-amber-400',
-  replied: 'bg-green-500/20 text-green-400',
-  qualified: 'bg-purple-500/20 text-purple-400',
-  rejected: 'bg-red-500/20 text-red-400',
-  converted: 'bg-emerald-500/20 text-emerald-400',
-};
-
 const platformIcons: Record<string, string> = {
-  youtube: 'YT',
-  x: 'X',
-  instagram: 'IG',
-  tiktok: 'TT',
-  discord: 'DC',
-  telegram: 'TG',
-  twitch: 'TW',
-  linkedin: 'LI',
+  youtube: 'YT', x: 'X', instagram: 'IG', tiktok: 'TT',
+  discord: 'DC', telegram: 'TG', twitch: 'TW', linkedin: 'LI',
 };
 
 function formatFollowers(n: number) {
@@ -33,76 +18,63 @@ function formatFollowers(n: number) {
 
 export function CreatorCard({ creator }: Props) {
   return (
-    <Link
-      href={`/creators/${creator.id}`}
-      className="block rounded-lg border border-zinc-800 bg-zinc-900 p-4 transition-colors hover:border-zinc-600"
-    >
+    <Link href={`/creators/${creator.id}`}
+      className="block rounded-xl p-4 transition-all hover:translate-y-[-2px]"
+      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)' }}>
       <div className="flex items-start justify-between">
         <div>
-          <h3 className="font-semibold text-white">{creator.name}</h3>
-          <p className="mt-0.5 text-xs text-zinc-500">
+          <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>{creator.name}</h3>
+          <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
             {formatFollowers(creator.total_followers)} followers
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-400">
+          <span className="rounded-full px-2.5 py-0.5 text-xs font-bold"
+            style={{ background: 'var(--accent-gold-dim)', color: 'var(--accent-gold)' }}>
             {creator.lead_score}
-          </span>
-          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[creator.status]}`}>
-            {creator.status}
           </span>
         </div>
       </div>
 
-      {/* Platform badges */}
       <div className="mt-3 flex flex-wrap gap-1.5">
-        {creator.accounts.map(acc => (
-          <span
-            key={acc.id}
-            className="inline-flex items-center gap-1 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
-          >
+        {(creator.accounts ?? []).map(acc => (
+          <span key={acc.id} className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs"
+            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}>
             <span className="font-bold">{platformIcons[acc.platform] || acc.platform}</span>
-            <span className="text-zinc-500">{formatFollowers(acc.followers)}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{formatFollowers(acc.followers)}</span>
           </span>
         ))}
       </div>
 
-      {/* Feature flags */}
       <div className="mt-3 flex flex-wrap gap-1.5">
         {creator.has_course && <Badge label="Course" />}
         {creator.has_discord && <Badge label="Discord" />}
         {creator.has_telegram && <Badge label="Telegram" />}
-        {creator.promoting_prop_firms && <Badge label="Prop Firms" variant="highlight" />}
+        {creator.promoting_prop_firms && <Badge label="Prop Firms" gold />}
       </div>
 
-      {/* Contact */}
       {(creator.public_email || creator.website) && (
-        <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
+        <div className="mt-3 flex flex-wrap gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
           {creator.public_email && <span>{creator.public_email}</span>}
           {creator.website && <span>{creator.website}</span>}
         </div>
       )}
 
-      {/* Prop firms */}
       {(creator.prop_firms_mentioned ?? []).length > 0 && (
-        <div className="mt-2 text-xs text-zinc-600">
-          Mentions: {(creator.prop_firms_mentioned ?? []).join(', ')}
+        <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+          Mentions: {creator.prop_firms_mentioned.join(', ')}
         </div>
       )}
     </Link>
   );
 }
 
-function Badge({ label, variant }: { label: string; variant?: 'highlight' }) {
+function Badge({ label, gold }: { label: string; gold?: boolean }) {
   return (
-    <span
-      className={`rounded px-1.5 py-0.5 text-xs ${
-        variant === 'highlight'
-          ? 'bg-green-500/20 text-green-400'
-          : 'bg-zinc-800 text-zinc-400'
-      }`}
-    >
-      {label}
-    </span>
+    <span className="rounded px-1.5 py-0.5 text-xs"
+      style={{
+        background: gold ? 'var(--accent-gold-dim)' : 'var(--bg-hover)',
+        color: gold ? 'var(--accent-gold)' : 'var(--text-secondary)',
+      }}>{label}</span>
   );
 }
