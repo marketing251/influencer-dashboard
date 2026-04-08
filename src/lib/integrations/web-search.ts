@@ -116,11 +116,14 @@ async function searchBrave(query: string): Promise<{ url: string; title: string;
 async function searchDDG(query: string): Promise<string | null> {
   await searchLimit.wait();
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
     const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(8000),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     if (res.status !== 200) return null;
     const html = await res.text();
     if (html.includes('captcha') || html.includes('CAPTCHA')) return null;
@@ -185,14 +188,21 @@ export async function discoverViaWebSearch(opts: {
 
   log.info('web-search: seed data loaded', { platform, count: allHandles.size });
 
-  // Strategy 2: DuckDuckGo (free, may CAPTCHA)
+  // Strategy 2: DuckDuckGo (disabled by default — enable with ENABLE_DDG_SEARCH=true)
+  // DDG frequently returns CAPTCHAs for server-side requests, causing timeouts
+  const enableDDG = process.env.ENABLE_DDG_SEARCH === 'true';
   const queries = platform === 'instagram'
-    ? ['instagram.com forex trader educator', 'instagram.com prop firm funded trader FTMO', 'instagram.com trading mentor course']
-    : ['linkedin.com/in forex trader educator', 'linkedin.com/in prop firm funded trader'];
+    ? ['instagram.com forex trader educator']
+    : ['linkedin.com/in forex trader educator'];
 
   let ddgWorked = false;
+  if (enableDDG) {
+  let ddgBlocked = false;
   for (const query of queries) {
-    const html = await searchDDG(query);
+    if (ddgBlocked) break;
+    let html: string | null = null;
+    try { html = await searchDDG(query); } catch { /* swallow */ }
+    if (html === null) { ddgBlocked = true; continue; }
     if (html) {
       ddgWorked = true;
       const handles = extractHandles(html, platform);
@@ -215,32 +225,39 @@ export async function discoverViaWebSearch(opts: {
       log.debug('web-search: DDG returned captcha or error', { query: query.slice(0, 40) });
     }
   }
+  } else {
+    log.info('web-search: DDG search disabled (set ENABLE_DDG_SEARCH=true to enable)');
+  }
 
-  // Strategy 3: Brave (if available and DDG failed/limited)
+  // Strategy 3: Brave (if available)
   if (hasBrave) {
-    const braveQueries = platform === 'instagram'
-      ? ['best forex traders Instagram 2025', 'top trading influencers Instagram']
-      : ['top forex traders LinkedIn', 'trading educators LinkedIn'];
+    try {
+      const braveQueries = platform === 'instagram'
+        ? ['best forex traders Instagram 2025']
+        : ['top forex traders LinkedIn'];
 
-    for (const query of braveQueries) {
-      const results = await searchBrave(query);
-      for (const r of results) {
-        const handles = extractHandles(`${r.url} ${r.title} ${r.snippet}`, platform);
-        for (const h of handles) {
-          if (!allHandles.has(h)) {
-            allHandles.set(h, {
-              name: prettify(h),
-              handle: h,
-              platformHint: platform,
-              profileUrl: platform === 'instagram' ? `https://instagram.com/${h}` : `https://linkedin.com/in/${h}`,
-              websiteUrl: null,
-              linkInBioUrl: null,
-              sourceUrl: r.url,
-              sourceTitle: r.title,
-            });
+      for (const query of braveQueries) {
+        const results = await searchBrave(query);
+        for (const r of results) {
+          const handles = extractHandles(`${r.url} ${r.title} ${r.snippet}`, platform);
+          for (const h of handles) {
+            if (!allHandles.has(h)) {
+              allHandles.set(h, {
+                name: prettify(h),
+                handle: h,
+                platformHint: platform,
+                profileUrl: platform === 'instagram' ? `https://instagram.com/${h}` : `https://linkedin.com/in/${h}`,
+                websiteUrl: null,
+                linkInBioUrl: null,
+                sourceUrl: r.url,
+                sourceTitle: r.title,
+              });
+            }
           }
         }
-      }
+    }
+    } catch (err) {
+      log.warn('web-search: Brave search failed', { error: String(err) });
     }
   }
 

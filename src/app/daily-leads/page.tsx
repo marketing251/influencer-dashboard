@@ -66,14 +66,21 @@ function DailyLeadsContent() {
       const enriched = data.enrichment?.enriched ?? 0;
 
       const parts: string[] = [];
-      if (totalNew > 0) parts.push(`${totalNew} new`);
+      if (totalNew > 0) parts.push(`${totalNew} new leads found`);
       if (totalUpdated > 0) parts.push(`${totalUpdated} updated`);
       if (enriched > 0) parts.push(`${enriched} enriched`);
-      if (skipped.length > 0) parts.push(`${skipped.join(', ')} skipped (no API key/credits)`);
-      if (totalErrors > 0) parts.push(`${totalErrors} errors`);
+      if (skipped.length > 0) parts.push(`${skipped.join(', ')} skipped`);
 
-      setRefreshStatus('success');
-      setRefreshMessage(parts.length > 0 ? parts.join(' | ') : 'No new creators found — check API keys and quotas');
+      if (totalNew + totalUpdated > 0) {
+        setRefreshStatus('success');
+        setRefreshMessage(parts.join(' | '));
+      } else if (totalErrors > 0) {
+        setRefreshStatus('error');
+        setRefreshMessage(`Discovery ran but encountered ${totalErrors} errors. Check server logs for details.`);
+      } else {
+        setRefreshStatus('success');
+        setRefreshMessage('All leads up to date — no new creators discovered this run');
+      }
 
       // Refetch the table data
       fetchCreators();

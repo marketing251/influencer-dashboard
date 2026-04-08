@@ -239,15 +239,32 @@ async function createNewCreator(
 
   if (slugOwner) {
     if (slugOwner.name.toLowerCase() === data.name.toLowerCase()) {
+      // Same person — check if they already have this platform account
       const creatorId = slugOwner.id;
-      await supabaseAdmin.from('creator_accounts').insert({
-        creator_id: creatorId, platform: data.account.platform,
-        handle: data.account.handle, profile_url: data.account.profile_url,
-        followers: data.account.followers, platform_id: data.account.platform_id,
-        bio: data.account.bio, verified: data.account.verified, last_scraped_at: now,
-      });
+      const { data: existingAcc } = await supabaseAdmin
+        .from('creator_accounts')
+        .select('id')
+        .eq('creator_id', creatorId)
+        .eq('platform', data.account.platform)
+        .maybeSingle();
+
+      if (existingAcc) {
+        // Account already linked — just update it and bump timestamps
+        await supabaseAdmin.from('creator_accounts').update({
+          followers: data.account.followers, bio: data.account.bio,
+          verified: data.account.verified, last_scraped_at: now, updated_at: now,
+        }).eq('id', existingAcc.id);
+      } else {
+        // New platform account for existing creator
+        await supabaseAdmin.from('creator_accounts').insert({
+          creator_id: creatorId, platform: data.account.platform,
+          handle: data.account.handle, profile_url: data.account.profile_url,
+          followers: data.account.followers, platform_id: data.account.platform_id,
+          bio: data.account.bio, verified: data.account.verified, last_scraped_at: now,
+        });
+      }
       await supabaseAdmin.from('creators').update({ last_seen_at: now, updated_at: now }).eq('id', creatorId);
-      log.info('pipeline.upsert: linked account', { name: data.name, creator_id: creatorId, platform: data.account.platform });
+      log.info('pipeline.upsert: linked/updated account', { name: data.name, creator_id: creatorId, platform: data.account.platform });
       return { action: 'updated', creator_id: creatorId, name: data.name };
     }
     slug = `${slug}-${data.account.platform}`;

@@ -86,7 +86,7 @@ async function runProvider(provider: DiscoveryProvider): Promise<PlatformResult>
 
 // ─── Website enrichment ─────────────────────────────────────────────
 
-async function runEnrichment(): Promise<{ attempted: number; enriched: number; errors: number }> {
+async function runEnrichment(maxCreators = 10): Promise<{ attempted: number; enriched: number; errors: number }> {
   const stats = { attempted: 0, enriched: 0, errors: 0 };
   if (!isSupabaseConfigured()) return stats;
 
@@ -95,7 +95,7 @@ async function runEnrichment(): Promise<{ attempted: number; enriched: number; e
     .select('id, website, link_in_bio_url, public_email, instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, course_url, has_skool, has_whop, niche, primary_platform, prop_firms_mentioned')
     .not('website', 'is', null)
     .order('lead_score', { ascending: false })
-    .limit(30);
+    .limit(maxCreators);
 
   const needsEnrichment = (creatorsToEnrich ?? []).filter(c =>
     !c.public_email || !c.instagram_url || !c.linkedin_url || !c.youtube_url || !c.x_url || !c.niche || !c.primary_platform,
@@ -263,23 +263,33 @@ export async function discoverLeads(): Promise<DiscoverLeadsResult> {
   const startedAt = new Date().toISOString();
   log.info('discoverLeads: started');
 
-  // Run all API providers in parallel
+  // Run all API providers in parallel with 60s timeout per provider
   const apiProviders = getApiProviders();
   const platformResults: Record<string, PlatformResult> = {};
 
-  const results = await Promise.all(
+  const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+    ]);
+
+  const settled = await Promise.allSettled(
     apiProviders.map(async provider => {
-      const result = await runProvider(provider);
+      const result = await withTimeout(runProvider(provider), 60_000, provider.label);
       return { platform: provider.platform, result };
     }),
   );
 
-  for (const { platform, result } of results) {
-    platformResults[platform] = result;
+  for (const s of settled) {
+    if (s.status === 'fulfilled') {
+      platformResults[s.value.platform] = s.value.result;
+    } else {
+      log.warn('discoverLeads: provider failed', { error: s.reason?.message });
+    }
   }
 
-  // Run enrichment
-  const { result: enrichment } = await withLogging('discoverLeads.enrichment', runEnrichment);
+  // Run enrichment (limit to 5 creators to keep total time under 90s)
+  const { result: enrichment } = await withLogging('discoverLeads.enrichment', () => runEnrichment(5));
 
   const completedAt = new Date().toISOString();
 
