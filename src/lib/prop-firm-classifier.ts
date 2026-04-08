@@ -1,21 +1,25 @@
 /**
- * Prop firm classifier — determines if a lead IS a prop firm (vs someone who
- * merely discusses, reviews, or affiliates prop firms).
+ * Prop firm classifier — determines if a lead IS a prop firm.
  *
- * Purpose: We sell white-label prop firm products. Actual prop firms are NOT
- * sales leads — educators, influencers, affiliates, and community owners ARE.
+ * We sell white-label prop firm products. Actual prop firms are NOT leads.
+ * Educators, influencers, affiliates, reviewers, and communities ARE leads.
+ *
+ * Key principle: someone who DISCUSSES, REVIEWS, or AFFILIATES prop firms
+ * is a valid lead. Only entities that OPERATE a prop firm are excluded.
  */
 
 import { log } from './logger';
 
 export interface PropFirmClassification {
   is_prop_firm: boolean;
-  confidence: number;      // 0-100
+  confidence: number;
   reasons: string[];
 }
 
-// Known prop firm brand names — if the lead's name/slug IS one of these, it's a firm
-const KNOWN_FIRMS = [
+// ─── Known prop firm EXACT brand names ──────────────────────────────
+// These are the official operating names of prop trading firms.
+// A lead whose name matches one of these (exactly or as a substring) is excluded.
+const KNOWN_FIRM_NAMES = [
   'ftmo', 'myfundedfx', 'the5ers', 'fundednext', 'topstep',
   'apex trader funding', 'surgetrader', 'e8 funding', 'e8funding',
   'funded trading plus', 'alpha capital group', 'lux trading firm',
@@ -23,47 +27,48 @@ const KNOWN_FIRMS = [
   'elite trader funding', 'goat funded trader', 'blueberry funded',
   'true forex funds', 'the trading pit', 'bulenox', 'uprofit',
   'earn2trade', 'oneup trader', 'tradeday', 'maven trading',
+  'the funded trader', 'thefundedtrader', 'fundedtrader',
+  'funded trader markets',
 ];
 
-// URL patterns that indicate the entity IS a prop firm
+// ─── Known prop firm domains ────────────────────────────────────────
 const FIRM_DOMAINS = [
   'ftmo.com', 'myfundedfx.com', 'the5ers.com', 'fundednext.com',
   'topstep.com', 'apextraderfunding.com', 'surgetrader.com',
   'e8funding.com', 'fundedtradingplus.com', 'alphacapitalgroup.uk',
   'luxtradingfirm.com', 'citytradersimperium.com', 'fundingpips.com',
   'elitetraderfunding.com', 'goatfundedtrader.com', 'blueberryfunded.com',
-  'trueforexfunds.com', 'thetradingpit.com',
+  'trueforexfunds.com', 'thetradingpit.com', 'thefundedtrader.com',
 ];
 
-// Phrases that strongly indicate the entity SELLS funded accounts (not just discusses them)
-const FIRM_SELLING_SIGNALS = [
-  /\b(?:buy|purchase|start)\s+(?:a\s+)?challenge\b/i,
-  /\bchallenge\s+(?:pricing|fee|cost)\b/i,
-  /\bevaluation\s+(?:program|phase|account)\b/i,
-  /\bget\s+funded\s+(?:today|now|instantly)\b/i,
-  /\btrade\s+our\s+capital\b/i,
-  /\bfunding\s+(?:program|solution|platform)\b/i,
-  /\bprofit\s+split\s+(?:up\s+to\s+)?\d/i,
-  /\baccount\s+sizes?\s+(?:up\s+to\s+)?\$?\d/i,
-  /\binstant\s+funding\b/i,
-  /\bscaling\s+plan\b/i,
-  /\bsimulated\s+(?:funding|trading|capital)\b/i,
-  /\bprop\s+(?:trading\s+)?firm\b/i,
+// ─── Names/keywords that prove someone is NOT a prop firm ───────────
+// If any of these appear in the name, the lead is likely an educator/reviewer.
+const SAFE_SIGNALS = [
+  /\breview/i, /\breviews/i, /\breviewer/i,
+  /\beducat/i, /\bmentor/i, /\bcoach/i, /\bteach/i,
+  /\bcourse/i, /\bacademy/i, /\btraining/i,
+  /\baffiliat/i, /\bpartner/i,
+  /\bcommunity/i, /\bdiscord/i, /\btelegram/i,
+  /\bsignal/i, /\balert/i,
+  /\byoutube/i, /\bchannel/i, /\bpodcast/i,
+  /\bblog/i, /\bmedia/i, /\bnews/i,
+  /\bkid\b/i, /\bguy\b/i, /\blife/i,
+  /\bjourney/i, /\bresult/i, /\bproof/i,
+  /\bpassi?ng\b/i, // "passing strategy" = educator
+  /\bSMB Capital/i, // trading education firm, not a prop firm
 ];
 
 /**
  * Classify whether a lead IS a prop firm.
  *
- * Uses a point system:
- * - Name matches known firm:      +60 (very strong)
- * - Website matches known domain: +50 (very strong)
- * - Name contains "funded" as a noun: +20
- * - Selling signals in bio/desc:  +15 each (max 45)
+ * Logic:
+ * 1. If name contains a safe signal (review, educator, mentor, etc.) → NOT a firm
+ * 2. If name exactly matches a known firm brand → IS a firm (+80)
+ * 3. If website matches a firm domain → IS a firm (+70)
+ * 4. Threshold: >= 60 = excluded
  *
- * Threshold: >= 50 = classified as prop firm
- *
- * NOTE: Leads that MENTION prop firms (educators, reviewers, affiliates) should
- * NOT trigger this. The signals specifically look for the entity being a firm.
+ * This is deliberately conservative — we'd rather keep a questionable lead
+ * than accidentally exclude an educator who's a valid prospect.
  */
 export function classifyPropFirm(input: {
   name: string;
@@ -73,50 +78,47 @@ export function classifyPropFirm(input: {
 }): PropFirmClassification {
   let score = 0;
   const reasons: string[] = [];
-  const nameLower = (input.name ?? '').toLowerCase();
-  const slugLower = (input.slug ?? '').toLowerCase();
-  const websiteLower = (input.website ?? '').toLowerCase();
-  const bioLower = (input.bio ?? '').toLowerCase();
+  const nameLower = (input.name ?? '').toLowerCase().trim();
+  const slugLower = (input.slug ?? '').toLowerCase().trim();
+  const websiteLower = (input.website ?? '').toLowerCase().trim();
+  const combined = `${nameLower} ${slugLower}`;
 
-  // Check 1: Name matches a known prop firm
-  for (const firm of KNOWN_FIRMS) {
+  // SAFETY CHECK: if the name contains safe signals, it's likely an educator/reviewer
+  for (const pattern of SAFE_SIGNALS) {
+    if (pattern.test(nameLower)) {
+      // Don't exclude this lead — they discuss firms, they're not a firm
+      return { is_prop_firm: false, confidence: 0, reasons: ['Safe signal in name: ' + pattern.source] };
+    }
+  }
+
+  // Check 1: Name is a known firm brand
+  for (const firm of KNOWN_FIRM_NAMES) {
     const normalized = firm.replace(/\s+/g, '');
-    if (nameLower.includes(normalized) || slugLower.includes(normalized) || nameLower.includes(firm)) {
-      score += 60;
-      reasons.push(`Name matches known firm: ${firm}`);
+    // Exact match or starts with the firm name (catches "FTMO" but not "FTMOChallengeTips")
+    if (
+      nameLower === firm || nameLower === normalized ||
+      slugLower === firm || slugLower === normalized ||
+      // The name IS the firm (not just mentions it)
+      nameLower.startsWith(firm + ' ') || nameLower.startsWith(normalized) && nameLower.length < normalized.length + 15
+    ) {
+      score += 80;
+      reasons.push(`Name matches firm: ${firm}`);
       break;
     }
   }
 
   // Check 2: Website is a known firm domain
-  for (const domain of FIRM_DOMAINS) {
-    if (websiteLower.includes(domain)) {
-      score += 50;
-      reasons.push(`Website is known firm: ${domain}`);
-      break;
+  if (websiteLower) {
+    for (const domain of FIRM_DOMAINS) {
+      if (websiteLower.includes(domain)) {
+        score += 70;
+        reasons.push(`Website is firm domain: ${domain}`);
+        break;
+      }
     }
   }
 
-  // Check 3: Name itself suggests being a funded-account provider
-  if (/\bfunded\b/i.test(nameLower) && !/\bfunded\s+trader\s+(?:result|review|journey|lifestyle)/i.test(nameLower)) {
-    // "Funded Trading Plus" = firm. "Funded Trader Results" = educator.
-    if (/funding|funded\s+(?:trading|account|program|next)/i.test(nameLower)) {
-      score += 20;
-      reasons.push('Name suggests funding provider');
-    }
-  }
-
-  // Check 4: Bio/description contains selling signals
-  let sellingMatches = 0;
-  for (const pattern of FIRM_SELLING_SIGNALS) {
-    if (pattern.test(bioLower)) {
-      sellingMatches++;
-      if (sellingMatches <= 3) reasons.push(`Bio matches: ${pattern.source.slice(0, 40)}`);
-    }
-  }
-  score += Math.min(sellingMatches * 15, 45);
-
-  const is_prop_firm = score >= 50;
+  const is_prop_firm = score >= 60;
   const confidence = Math.min(score, 100);
 
   if (is_prop_firm) {
@@ -127,7 +129,7 @@ export function classifyPropFirm(input: {
 }
 
 /**
- * Quick check for known firm names — used in pipeline for fast rejection.
+ * Quick boolean check.
  */
 export function isKnownPropFirm(name: string, slug?: string | null, website?: string | null): boolean {
   return classifyPropFirm({ name, slug, website }).is_prop_firm;
