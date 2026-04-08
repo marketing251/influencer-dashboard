@@ -4,7 +4,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useRef } from 'react';
 
 const platforms = ['all', 'youtube', 'x', 'instagram', 'linkedin', 'tiktok', 'discord', 'telegram'] as const;
-
 const sortOptions = [
   { value: 'lead_score', label: 'Lead Score' },
   { value: 'confidence_score', label: 'Confidence' },
@@ -12,7 +11,6 @@ const sortOptions = [
   { value: 'first_seen_at', label: 'First Seen' },
   { value: 'name', label: 'Name' },
 ];
-
 const followerRanges = [
   { value: '', label: 'Any Followers' },
   { value: '1000', label: '1K+' },
@@ -20,7 +18,6 @@ const followerRanges = [
   { value: '50000', label: '50K+' },
   { value: '100000', label: '100K+' },
 ];
-
 const contactOptions = [
   { value: '', label: 'All Contacts' },
   { value: 'has_email', label: 'Has Email' },
@@ -28,7 +25,6 @@ const contactOptions = [
   { value: 'has_contact_form', label: 'Has Contact Form' },
   { value: 'has_any_contact', label: 'Has Any Contact' },
 ];
-
 const toggles = [
   { key: 'has_course', label: 'Course' },
   { key: 'has_discord', label: 'Discord' },
@@ -42,108 +38,69 @@ const toggles = [
   { key: 'new_today', label: 'New Today' },
 ];
 
-const selectStyle: React.CSSProperties = {
-  background: 'var(--bg-card)',
-  borderColor: 'var(--border)',
-  color: 'var(--text-primary)',
-};
+const sel: React.CSSProperties = { background: 'var(--bg-card)', borderColor: 'var(--border)', color: 'var(--text-primary)', borderRadius: 'var(--radius-sm)' };
 
 export function Filters() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sp = useSearchParams();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const update = useCallback(
-    (key: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (value && value !== 'all' && value !== '') params.set(key, value);
-      else params.delete(key);
-      router.push(`?${params.toString()}`);
-    },
-    [router, searchParams],
-  );
+  const set = useCallback((k: string, v: string) => {
+    const p = new URLSearchParams(sp.toString());
+    v && v !== 'all' ? p.set(k, v) : p.delete(k);
+    router.push(`?${p.toString()}`);
+  }, [router, sp]);
 
-  const current = (key: string) => searchParams.get(key) || '';
-  const hasActive = searchParams.toString().length > 0;
+  const get = (k: string) => sp.get(k) || '';
+  const hasAny = sp.toString().length > 0;
 
-  // Contact filter: only one can be active at a time
-  const handleContactFilter = (value: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    // Clear all contact filters
-    ['has_email', 'has_phone', 'has_contact_form', 'has_any_contact'].forEach(k => params.delete(k));
-    if (value) params.set(value, 'true');
-    router.push(`?${params.toString()}`);
+  const setContact = (v: string) => {
+    const p = new URLSearchParams(sp.toString());
+    ['has_email', 'has_phone', 'has_contact_form', 'has_any_contact'].forEach(k => p.delete(k));
+    if (v) p.set(v, 'true');
+    router.push(`?${p.toString()}`);
   };
-
-  const activeContact = contactOptions.find(c =>
-    c.value && searchParams.get(c.value) === 'true',
-  )?.value ?? '';
+  const activeContact = contactOptions.find(c => c.value && sp.get(c.value) === 'true')?.value ?? '';
 
   return (
-    <div className="space-y-3">
-      {/* Row 1: Dropdowns */}
+    <div className="space-y-2.5">
+      {/* Dropdowns row */}
       <div className="flex flex-wrap items-center gap-2">
-        <select value={current('platform') || 'all'} onChange={e => update('platform', e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" style={selectStyle}>
-          {platforms.map(p => (
-            <option key={p} value={p}>{p === 'all' ? 'All Platforms' : p.charAt(0).toUpperCase() + p.slice(1)}</option>
-          ))}
+        <select value={get('platform') || 'all'} onChange={e => set('platform', e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
+          {platforms.map(p => <option key={p} value={p}>{p === 'all' ? 'All Platforms' : p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
         </select>
-
-        <select value={current('min_followers') || ''} onChange={e => update('min_followers', e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" style={selectStyle}>
+        <select value={get('min_followers') || ''} onChange={e => set('min_followers', e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
           {followerRanges.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
         </select>
-
-        <select value={activeContact} onChange={e => handleContactFilter(e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" style={selectStyle}>
+        <select value={activeContact} onChange={e => setContact(e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
           {contactOptions.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
         </select>
-
-        <select value={current('sort_by') || 'lead_score'} onChange={e => update('sort_by', e.target.value)}
-          className="rounded-lg border px-3 py-2 text-sm" style={selectStyle}>
+        <select value={get('sort_by') || 'lead_score'} onChange={e => set('sort_by', e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
           {sortOptions.map(o => <option key={o.value} value={o.value}>Sort: {o.label}</option>)}
         </select>
-
-        <button onClick={() => update('sort_order', current('sort_order') === 'asc' ? 'desc' : 'asc')}
-          className="rounded-lg border px-3 py-2 text-sm" style={{ ...selectStyle, cursor: 'pointer' }}>
-          {current('sort_order') === 'asc' ? '↑ Asc' : '↓ Desc'}
+        <button onClick={() => set('sort_order', get('sort_order') === 'asc' ? 'desc' : 'asc')} className="border px-2.5 py-[7px] text-[13px] font-medium" style={{ ...sel, cursor: 'pointer' }}>
+          {get('sort_order') === 'asc' ? '\u2191 Asc' : '\u2193 Desc'}
         </button>
-
-        <input type="text" placeholder="Search creators..." defaultValue={current('search')}
-          onChange={e => {
-            if (debounceRef.current) clearTimeout(debounceRef.current);
-            debounceRef.current = setTimeout(() => update('search', e.target.value), 300);
-          }}
-          className="rounded-lg border px-3 py-2 text-sm w-44"
-          style={{ ...selectStyle, outline: 'none' }} />
+        <input type="text" placeholder="Search..." defaultValue={get('search')}
+          onChange={e => { if (timerRef.current) clearTimeout(timerRef.current); timerRef.current = setTimeout(() => set('search', e.target.value), 300); }}
+          className="border px-2.5 py-[7px] text-[13px] w-36 outline-none" style={{ ...sel, borderRadius: 'var(--radius-sm)' }} />
       </div>
 
-      {/* Row 2: Toggle pills */}
+      {/* Toggle pills */}
       <div className="flex flex-wrap items-center gap-1.5">
         {toggles.map(f => {
-          const active = current(f.key) === 'true';
+          const on = get(f.key) === 'true';
           return (
-            <button key={f.key}
-              onClick={() => update(f.key, active ? '' : 'true')}
-              className="rounded-full px-3 py-1 text-xs font-medium transition-all"
+            <button key={f.key} onClick={() => set(f.key, on ? '' : 'true')}
+              className="rounded-full px-2.5 py-[3px] text-[11px] font-medium tracking-wide transition-all"
               style={{
-                background: active ? 'var(--accent)' : 'transparent',
-                color: active ? '#fff' : 'var(--text-muted)',
-                border: active ? 'none' : '1px solid var(--border)',
-              }}>
-              {f.label}
-            </button>
+                background: on ? (f.key === 'new_today' ? 'var(--success)' : 'var(--accent)') : 'transparent',
+                color: on ? '#fff' : 'var(--text-muted)',
+                border: on ? 'none' : '1px solid var(--border)',
+              }}>{f.label}</button>
           );
         })}
-
-        {hasActive && (
-          <button onClick={() => router.push('?')}
-            className="rounded-full px-3 py-1 text-xs"
-            style={{ color: 'var(--text-muted)' }}>
-            Clear all
-          </button>
-        )}
+        {hasAny && <button onClick={() => router.push('?')} className="px-2 py-[3px] text-[11px] rounded-full" style={{ color: 'var(--text-muted)' }}>Clear</button>}
       </div>
     </div>
   );
