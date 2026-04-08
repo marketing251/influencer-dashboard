@@ -42,25 +42,28 @@ function DailyLeadsContent() {
     setRefreshStatus('running');
     setRefreshError('');
 
-    // Run discovery in 4 sequential batches, each within Vercel 10s limit
-    const batches = ['seeds_ig', 'seeds_li', 'youtube', 'enrich'];
+    // Run discovery + enrichment in sequential batches, each within Vercel 10s limit
+    // Enrich runs 5 rounds (3 creators each = 15 total) to maximize email extraction
+    const batches = ['seeds_ig', 'seeds_li', 'youtube', 'enrich', 'enrich', 'enrich', 'enrich', 'enrich'];
     const sources: { name: string; discovered: number; inserted: number }[] = [];
-    let totalNew = 0, totalUpdated = 0, totalErrors = 0, attempted = 0;
+    let totalNew = 0, totalUpdated = 0, totalErrors = 0, totalRejected = 0, attempted = 0;
     let emailsFound = 0, phonesFound = 0;
 
     for (const batch of batches) {
       try {
         const res = await fetch(`/api/refresh-leads/batch?type=${batch}`, { method: 'POST' });
         let data;
-        try { data = await res.json(); } catch { continue; } // skip non-JSON responses
+        try { data = await res.json(); } catch { continue; }
         if (!res.ok) { totalErrors++; continue; }
 
         const disc = data.discovered ?? data.attempted ?? 0;
         const ins = data.new ?? 0;
         const upd = data.updated ?? 0;
+        const rej = data.rejected ?? 0;
         attempted += disc;
         totalNew += ins;
         totalUpdated += upd;
+        totalRejected += rej;
         if (data.errors) totalErrors += typeof data.errors === 'number' ? data.errors : 0;
         if (data.emails) emailsFound += data.emails;
         if (data.phones) phonesFound += data.phones;
@@ -80,7 +83,7 @@ function DailyLeadsContent() {
     }
 
     setRefreshStats({
-      totalNew, totalUpdated, totalSkipped: 0, totalErrors,
+      totalNew, totalUpdated, totalSkipped: totalRejected, totalErrors,
       attempted, target, targetReached, reason,
       enriched: 0, emailsFound, phonesFound, sources,
       timestamp: new Date().toLocaleTimeString(),

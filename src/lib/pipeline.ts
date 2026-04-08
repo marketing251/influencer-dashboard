@@ -69,18 +69,20 @@ export interface UpsertResult {
 // ─── Core upsert ────────────────────────────────────────────────────
 
 /**
- * Contact qualification: a lead must have at least one contact path.
- * Leads with zero contact paths are rejected before insert.
+ * Contact qualification: a lead must have a reachable contact path.
+ * Leads without at least a website are rejected — we need somewhere
+ * to extract email/phone/contact form from during enrichment.
  */
-function hasContactPath(data: DiscoveredCreator, signals: ReturnType<typeof analyzeText>): boolean {
-  // Has a website (which may have a contact page)
+function hasContactPath(data: DiscoveredCreator): boolean {
+  // Must have a website — this is where we extract emails from
   if (data.website) return true;
-  // Has an email detected in bio/description
-  if (signals.course_url) return true; // course implies website
-  // Seed data with known websites pass
-  if (data.source_type === 'seed') return true;
-  // YouTube/X API sources always have profile URLs (which are contactable)
-  if (data.source_type === 'youtube_api' || data.source_type === 'x_api') return true;
+  // Seeds with known websites in the seed data pass
+  if (data.source_type === 'seed' && data.website) return true;
+  // YouTube channels always have a public channel page (contactable via YouTube)
+  // but ONLY if they have significant following (worth the outreach effort)
+  if (data.source_type === 'youtube_api' && data.account.followers >= 1000) return true;
+  // X profiles with bios containing URLs pass
+  if (data.source_type === 'x_api' && data.bio && /https?:\/\//i.test(data.bio)) return true;
   return false;
 }
 
@@ -147,7 +149,7 @@ export async function upsertCreator(
     }
 
     // Contact qualification: reject leads without any contact path
-    if (!hasContactPath(data, signals)) {
+    if (!hasContactPath(data)) {
       log.info('pipeline.upsert: rejected (no contact path)', { name: data.name, platform: data.account.platform });
       return { action: 'skipped', creator_id: null, name: data.name, error: 'no_contact_path' };
     }
