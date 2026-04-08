@@ -24,42 +24,25 @@ export interface YouTubeChannel {
 
 export interface YouTubeDiscoveryResult { creator: DiscoveredCreator; posts: DiscoveredPost[] }
 
-// 60 queries across 12 niches — each costs 100 quota units
+// 15 high-yield queries — fits within Vercel Hobby 10s timeout
+// Each costs 100 quota units. 15 queries = 1,500 units (within 10K daily).
+// Designed for maximum unique channel diversity per query.
 const QUERIES = [
-  // Forex (10)
-  'forex trading education', 'forex trading mentor', 'forex trading course 2024',
-  'forex signals community', 'forex trader lifestyle', 'forex trading for beginners',
-  'forex strategy profitable', 'forex analysis daily', 'forex trading live stream',
-  'best forex traders youtube',
-  // Prop firms (8)
-  'prop firm trading challenge', 'FTMO funded trader', 'prop firm passing strategy',
-  'funded trader results payout', 'MyFundedFX trader', 'prop firm review 2024',
-  'best prop firm trading', 'funded account trading',
-  // Day trading (8)
-  'day trading course', 'day trading live stream', 'day trading for beginners',
-  'scalping trading strategy', 'day trading education', 'live day trading',
-  'day trader morning routine', 'small account day trading',
-  // Smart money / ICT (5)
-  'smart money concepts ICT', 'ICT trading methodology', 'order block trading',
-  'fair value gap trading', 'liquidity sweep trading',
-  // Futures (5)
-  'futures trading education', 'NQ ES futures trading', 'futures scalping strategy',
-  'micro futures trading', 'futures day trading live',
-  // Options (5)
-  'options trading strategy', 'options trading course', 'options day trading',
-  'selling options for income', 'options trading for beginners',
-  // Crypto (5)
-  'crypto trading education', 'bitcoin trading strategy', 'crypto day trading',
-  'altcoin trading strategy', 'crypto technical analysis',
-  // Swing / position (4)
-  'swing trading strategy', 'swing trading course', 'position trading stocks',
-  'swing trading for beginners',
-  // General / community (5)
-  'trading mentor coaching', 'trading discord community', 'trading course review',
-  'best traders to follow 2024', 'trading psychology education',
-  // Stocks (5)
-  'stock trading education', 'penny stock trading', 'stock market course',
-  'growth stock investing', 'stock trading for beginners',
+  'forex trading education course',
+  'prop firm funded trader FTMO challenge',
+  'day trading live stream education',
+  'smart money ICT order block trading',
+  'futures trading NQ ES scalping',
+  'options trading strategy course',
+  'crypto bitcoin trading education',
+  'swing trading strategy course',
+  'trading mentor coaching discord',
+  'funded trader results payout proof',
+  'forex signals community mentor',
+  'penny stock day trading education',
+  'trading psychology mindset education',
+  'prop firm passing strategy funded',
+  'best traders to follow youtube 2024',
 ];
 
 async function ytFetch<T>(endpoint: string, params: Record<string, string>): Promise<T> {
@@ -117,7 +100,7 @@ function toCreator(ch: YouTubeChannel): YouTubeDiscoveryResult {
 export async function discoverYouTubeCreators(opts?: {
   maxPerQuery?: number; minSubscribers?: number; maxPages?: number;
 }): Promise<YouTubeDiscoveryResult[]> {
-  const { maxPerQuery = 10, minSubscribers = 500, maxPages = 2 } = opts ?? {};
+  const { maxPerQuery = 10, minSubscribers = 500, maxPages = 1 } = opts ?? {};
   const seen = new Set<string>();
   const all: string[] = [];
   let quota = false;

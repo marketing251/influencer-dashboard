@@ -43,7 +43,18 @@ function DailyLeadsContent() {
     setRefreshError('');
     try {
       const res = await fetch('/api/refresh-leads', { method: 'POST' });
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        // Server returned non-JSON (likely Vercel timeout HTML page)
+        setRefreshStatus('error');
+        setRefreshError(res.status === 504 || res.status === 502
+          ? 'Request timed out — Vercel Hobby has a 10s limit. Try upgrading to Pro for longer refreshes.'
+          : `Server returned invalid response (${res.status}). The refresh may still be running — check back in a moment.`);
+        setTimeout(() => fetchCreators(), 5000); // refresh table in case data was partially saved
+        return;
+      }
       if (!res.ok) { setRefreshStatus('error'); setRefreshError(data.error ?? `Failed (${res.status})`); return; }
 
       const s = data.summary ?? {};

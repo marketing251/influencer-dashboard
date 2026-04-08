@@ -10,8 +10,8 @@ export async function POST() {
   try {
     const result = await discoverLeads({
       skipEnrichment: false,   // MUST run enrichment to extract emails
-      timeoutMs: 45_000,      // 45s per provider (YouTube needs time for 30 queries)
-      enrichmentBudget: 20,   // enrich up to 20 creators per refresh
+      timeoutMs: 8_000,       // 8s per provider (Vercel Hobby 10s limit)
+      enrichmentBudget: 5,    // enrich top 5 (fast, fits timeout)
     });
     return NextResponse.json(result);
   } catch (err) {
