@@ -33,7 +33,8 @@ export async function GET(request: NextRequest) {
   log.info('daily-refresh: starting scheduled run');
 
   try {
-    const result = await discoverLeads();
+    // Cron jobs get longer timeouts — run full enrichment
+    const result = await discoverLeads({ skipEnrichment: false, timeoutMs: 60_000 });
 
     const ytNew = result.youtube.new;
     const xNew = result.x.new;

@@ -259,11 +259,12 @@ function inferPrimaryPlatform(
  * 1. All configured API providers in parallel
  * 2. Website enrichment for creators missing email
  */
-export async function discoverLeads(): Promise<DiscoverLeadsResult> {
+export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs?: number }): Promise<DiscoverLeadsResult> {
   const startedAt = new Date().toISOString();
-  log.info('discoverLeads: started');
+  const providerTimeout = opts?.timeoutMs ?? 8_000; // 8s default fits Vercel Hobby 10s limit
+  log.info('discoverLeads: started', { providerTimeout });
 
-  // Run all API providers in parallel with 60s timeout per provider
+  // Run all API providers in parallel with timeout per provider
   const apiProviders = getApiProviders();
   const platformResults: Record<string, PlatformResult> = {};
 
@@ -275,7 +276,7 @@ export async function discoverLeads(): Promise<DiscoverLeadsResult> {
 
   const settled = await Promise.allSettled(
     apiProviders.map(async provider => {
-      const result = await withTimeout(runProvider(provider), 60_000, provider.label);
+      const result = await withTimeout(runProvider(provider), providerTimeout, provider.label);
       return { platform: provider.platform, result };
     }),
   );
@@ -284,12 +285,20 @@ export async function discoverLeads(): Promise<DiscoverLeadsResult> {
     if (s.status === 'fulfilled') {
       platformResults[s.value.platform] = s.value.result;
     } else {
-      log.warn('discoverLeads: provider failed', { error: s.reason?.message });
+      const errMsg = s.reason?.message ?? 'Unknown error';
+      log.warn('discoverLeads: provider failed/timed out', { error: errMsg });
+      // Still record it so UI knows what happened
+      const timedOut = errMsg.includes('timed out');
+      // We don't know which provider this was from allSettled, so skip
     }
   }
 
-  // Run enrichment (limit to 5 creators to keep total time under 90s)
-  const { result: enrichment } = await withLogging('discoverLeads.enrichment', () => runEnrichment(5));
+  // Run enrichment only if not skipped (skip on Vercel Hobby to stay under 10s)
+  let enrichmentResult = { attempted: 0, enriched: 0, errors: 0 };
+  if (!opts?.skipEnrichment) {
+    const { result: enrichment } = await withLogging('discoverLeads.enrichment', () => runEnrichment(3));
+    if (enrichment) enrichmentResult = enrichment;
+  }
 
   const completedAt = new Date().toISOString();
 
@@ -297,14 +306,14 @@ export async function discoverLeads(): Promise<DiscoverLeadsResult> {
     platforms: Object.fromEntries(
       Object.entries(platformResults).map(([k, v]) => [k, { new: v.new, updated: v.updated }]),
     ),
-    enriched: enrichment?.enriched ?? 0,
+    enriched: enrichmentResult.enriched,
   });
 
   return {
     started_at: startedAt,
     completed_at: completedAt,
     platforms: platformResults,
-    enrichment: enrichment ?? { attempted: 0, enriched: 0, errors: 0 },
+    enrichment: enrichmentResult,
     // Legacy accessors for existing UI
     youtube: platformResults['youtube'] ?? skippedResult('YouTube provider not registered'),
     x: platformResults['x'] ?? skippedResult('X provider not registered'),

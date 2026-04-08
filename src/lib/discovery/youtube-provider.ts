@@ -12,10 +12,10 @@ export const youtubeProvider: DiscoveryProvider = {
 
   async discover(): Promise<DiscoveryResult[]> {
     return discoverYouTubeCreators({
-      maxPerQuery: 5,
+      maxPerQuery: 3,           // 3 results per query (fast)
       minSubscribers: 1_000,
-      fetchVideosAbove: 10_000,
-      maxVideoFetches: 10,
+      fetchVideosAbove: 50_000, // only fetch videos for large channels
+      maxVideoFetches: 2,       // max 2 video fetches to stay fast
     });
   },
 
