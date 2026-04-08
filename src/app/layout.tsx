@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Influencer Outreach HQ - Trading Creator Discovery",
+  title: "Influencer Outreach HQ",
   description: "Discover and manage outreach to trading influencers and educators",
 };
 
@@ -28,9 +28,10 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      data-theme="dark"
       suppressHydrationWarning
     >
-      <body className="min-h-full" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+      <body className="min-h-full">
         <ThemeProvider>
           <Nav />
           <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>

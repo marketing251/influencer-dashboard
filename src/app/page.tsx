@@ -55,6 +55,7 @@ async function fetchTopCreators(): Promise<CreatorWithAccounts[]> {
   return (data ?? []).map(c => ({
     ...c,
     accounts: c.creator_accounts ?? [],
+    prop_firms_mentioned: c.prop_firms_mentioned ?? [],
   }));
 }
 
@@ -73,11 +74,19 @@ async function fetchRecentRuns(): Promise<DailyDiscovery[]> {
 export const dynamic = 'force-dynamic';
 
 export default async function OverviewPage() {
-  const [stats, topCreators, recentRuns] = await Promise.all([
-    fetchStats(),
-    fetchTopCreators(),
-    fetchRecentRuns(),
-  ]);
+  let stats: DashboardStats = { total_creators: 0, new_today: 0, total_with_email: 0, avg_lead_score: 0, outreach_sent: 0, outreach_replied: 0, platforms: [] };
+  let topCreators: CreatorWithAccounts[] = [];
+  let recentRuns: DailyDiscovery[] = [];
+
+  try {
+    [stats, topCreators, recentRuns] = await Promise.all([
+      fetchStats(),
+      fetchTopCreators(),
+      fetchRecentRuns(),
+    ]);
+  } catch (err) {
+    console.error('Overview page data fetch failed:', err);
+  }
 
   const isEmpty = stats.total_creators === 0;
 
