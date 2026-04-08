@@ -16,21 +16,28 @@ const links = [
 export function Nav() {
   const path = usePathname();
   const { theme } = useThemeContext();
-  const titleBold = theme === 'dark' ? '#C8A456' : '#0F172A';
-  const titleLight = theme === 'dark' ? 'rgba(200,164,86,0.7)' : '#64748B';
 
   return (
     <nav style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
       <div className="mx-auto flex h-12 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-5">
-          {/* Logo + title */}
-          <Link href="/" className="flex items-center gap-2.5">
-            <PropAccountLogo size={26} />
-            <span className="hidden sm:inline text-[15px] tracking-tight">
-              <span className="font-bold" style={{ color: titleBold }}>Influencer Outreach</span>
-              <span className="font-normal" style={{ color: titleLight }}> HQ</span>
-            </span>
+        <div className="flex items-center gap-6">
+          {/* Brand unit: logo + title as one cohesive block */}
+          <Link href="/" className="group flex items-center gap-2 transition-opacity hover:opacity-85">
+            <PropAccountLogo size={24} />
+            <div className="flex items-baseline gap-[3px] leading-none">
+              <span className="text-[14px] font-semibold tracking-[-0.01em]"
+                style={{ color: theme === 'dark' ? '#C8A456' : '#0F172A' }}>
+                Influencer Outreach
+              </span>
+              <span className="text-[14px] font-light tracking-[-0.01em]"
+                style={{ color: theme === 'dark' ? 'rgba(200,164,86,0.55)' : '#94A3B8' }}>
+                HQ
+              </span>
+            </div>
           </Link>
+
+          {/* Divider between brand and nav */}
+          <div className="hidden sm:block h-5 w-px" style={{ background: 'var(--border)' }} />
 
           {/* Navigation links */}
           <div className="flex gap-0.5">

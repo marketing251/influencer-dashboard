@@ -2,40 +2,24 @@
 
 import { useThemeContext } from './theme-provider';
 import Image from 'next/image';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 /**
- * PropAccount logo — uses PNG images if available, falls back to text wordmark.
+ * PropAccount logo mark.
  *
- * To use the actual logo images:
- * 1. Save the navy logo as: public/logos/logo-light.png
- * 2. Save the white logo as: public/logos/logo-dark.png
- * 3. The component will automatically detect and use them.
- *
- * Without images: renders "propaccount" text in brand style.
+ * Loads PNG if available: public/logos/logo-dark.png / logo-light.png
+ * Falls back to nothing (title in nav handles branding).
  */
-export function PropAccountLogo({ size = 28 }: { size?: number }) {
+export function PropAccountLogo({ size = 24 }: { size?: number }) {
   const { theme } = useThemeContext();
   const [hasImage, setHasImage] = useState(true);
 
-  const src = theme === 'dark' ? '/logos/logo-dark.png' : '/logos/logo-light.png';
-
-  if (!hasImage) {
-    // Fallback: text wordmark
-    const bold = theme === 'dark' ? '#C8A456' : '#0F172A';
-    const light = theme === 'dark' ? 'rgba(200,164,86,0.7)' : '#64748B';
-    return (
-      <span style={{ fontSize: size * 0.55, lineHeight: 1 }} className="tracking-tight">
-        <span className="font-bold" style={{ color: bold }}>prop</span>
-        <span className="font-normal" style={{ color: light }}>account</span>
-      </span>
-    );
-  }
+  if (!hasImage) return null;
 
   return (
     <Image
-      src={src}
-      alt="PropAccount Logo"
+      src={theme === 'dark' ? '/logos/logo-dark.png' : '/logos/logo-light.png'}
+      alt="PropAccount"
       width={size}
       height={size}
       className="object-contain"
