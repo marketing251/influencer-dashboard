@@ -1,18 +1,14 @@
 /**
  * Pipeline utilities for normalizing and upserting creator data.
- * Central place for DB writes so discovery routes stay focused on fetching.
  */
 
 import { isSupabaseConfigured, supabaseAdmin } from './db';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
 import { detectPropFirmsFromSources } from './prop-firms';
 import { extractAllSignals } from './social-links';
+import { classifyPropFirm } from './prop-firm-classifier';
 import { log } from './logger';
 import type { Platform } from './types';
-
-// ─── Text analysis ──────────────────────────────────────────────────
-
-import { classifyPropFirm } from './prop-firm-classifier';
 
 const COURSE_PATTERN = /\b(?:course|mentor(?:ship)?|academy|learn|enroll|program|masterclass|bootcamp|curriculum|coaching|training|workshop|certification)\b/i;
 const DISCORD_PATTERN = /discord\.(?:gg|com\/invite)\//i;
@@ -26,11 +22,19 @@ function analyzeText(texts: (string | null | undefined)[]) {
     hasCourse: COURSE_PATTERN.test(combined),
     hasDiscord: DISCORD_PATTERN.test(combined),
     hasTelegram: TELEGRAM_PATTERN.test(combined),
-    ...signals, // instagram_url, linkedin_url, youtube_url, x_url, discord_url, telegram_url, link_in_bio_url, course_url, has_skool, has_whop
+    ...signals,
   };
 }
 
-// ─── Public types ───────────────────────────────────────────────────
+/**
+ * Contact qualification: a lead MUST have a website.
+ * Without a website, we can't extract email/phone/contact form.
+ * YouTube channels without linked websites are not outreach-ready.
+ */
+function hasContactPath(data: DiscoveredCreator): boolean {
+  if (data.website) return true;
+  return false;
+}
 
 export interface DiscoveredCreator {
   name: string;
@@ -68,24 +72,12 @@ export interface UpsertResult {
   error?: string;
 }
 
-// ─── Core upsert ────────────────────────────────────────────────────
+function mergeUrl(existing: string | null | undefined, discovered: string | null | undefined): string | null {
+  return existing || discovered || null;
+}
 
-/**
- * Contact qualification: a lead must have a reachable contact path.
- * Leads without at least a website are rejected — we need somewhere
- * to extract email/phone/contact form from during enrichment.
- */
-function hasContactPath(data: DiscoveredCreator): boolean {
-  // Must have a website — this is where we extract emails from
-  if (data.website) return true;
-  // Seeds with known websites in the seed data pass
-  if (data.source_type === 'seed' && data.website) return true;
-  // YouTube channels always have a public channel page (contactable via YouTube)
-  // but ONLY if they have significant following (worth the outreach effort)
-  if (data.source_type === 'youtube_api' && data.account.followers >= 1000) return true;
-  // X profiles with bios containing URLs pass
-  if (data.source_type === 'x_api' && data.bio && /https?:\/\//i.test(data.bio)) return true;
-  return false;
+function mergeBool(existing: boolean | undefined, discovered: boolean): boolean {
+  return existing || discovered;
 }
 
 export async function upsertCreator(
@@ -99,115 +91,72 @@ export async function upsertCreator(
   const now = new Date().toISOString();
 
   try {
-    // Dedup check 1: exact (platform, platform_id) match
     let existing = (await supabaseAdmin
-      .from('creator_accounts')
-      .select('creator_id, id')
-      .eq('platform', data.account.platform)
-      .eq('platform_id', data.account.platform_id)
+      .from('creator_accounts').select('creator_id, id')
+      .eq('platform', data.account.platform).eq('platform_id', data.account.platform_id)
       .maybeSingle()).data;
 
-    // Dedup check 2: same platform + normalized handle (catches format differences)
     if (!existing) {
       const normalHandle = data.account.handle.toLowerCase().replace(/^@/, '');
       existing = (await supabaseAdmin
-        .from('creator_accounts')
-        .select('creator_id, id')
-        .eq('platform', data.account.platform)
-        .ilike('handle', normalHandle)
+        .from('creator_accounts').select('creator_id, id')
+        .eq('platform', data.account.platform).ilike('handle', normalHandle)
         .maybeSingle()).data;
     }
 
-    // Dedup check 3: same website domain → same creator (cross-platform unification)
     if (!existing && data.website) {
       try {
         const domain = new URL(data.website).hostname.replace(/^www\./, '');
-        const { data: websiteMatch } = await supabaseAdmin
-          .from('creators')
-          .select('id')
-          .ilike('website', `%${domain}%`)
-          .maybeSingle();
-        if (websiteMatch) {
-          // Link this account to the existing creator
-          const creatorId = websiteMatch.id;
-          const { data: accountCheck } = await supabaseAdmin
-            .from('creator_accounts')
-            .select('id')
-            .eq('creator_id', creatorId)
-            .eq('platform', data.account.platform)
-            .maybeSingle();
-          if (accountCheck) {
-            existing = { creator_id: creatorId, id: accountCheck.id };
-          }
+        const { data: match } = await supabaseAdmin
+          .from('creators').select('id').ilike('website', `%${domain}%`).maybeSingle();
+        if (match) {
+          const { data: acc } = await supabaseAdmin
+            .from('creator_accounts').select('id')
+            .eq('creator_id', match.id).eq('platform', data.account.platform).maybeSingle();
+          if (acc) existing = { creator_id: match.id, id: acc.id };
         }
-      } catch { /* invalid URL, skip domain dedup */ }
+      } catch { /* skip */ }
     }
 
     const postTexts = (posts ?? []).map(p => `${p.title ?? ''} ${p.content_snippet ?? ''}`);
     const signals = analyzeText([data.bio, data.account.bio, ...postTexts]);
 
     if (existing) {
-      return await updateExistingCreator(existing, data, posts, signals, now);
+      return await updateExisting(existing, data, posts, signals, now);
     }
 
-    // Contact qualification: reject leads without any contact path
+    // Reject: no contact path
     if (!hasContactPath(data)) {
-      log.info('pipeline.upsert: rejected (no contact path)', { name: data.name, platform: data.account.platform });
       return { action: 'skipped', creator_id: null, name: data.name, error: 'no_contact_path' };
     }
 
-    // Prop firm exclusion: reject actual prop firms (we sell TO them, not prospect them)
-    const firmCheck = classifyPropFirm({ name: data.name, slug: data.slug, website: data.website, bio: data.bio });
-    if (firmCheck.is_prop_firm) {
-      log.info('pipeline.upsert: excluded (prop firm)', { name: data.name, confidence: firmCheck.confidence, reasons: firmCheck.reasons });
+    // Reject: prop firm
+    const firm = classifyPropFirm({ name: data.name, slug: data.slug, website: data.website, bio: data.bio });
+    if (firm.is_prop_firm) {
       return { action: 'skipped', creator_id: null, name: data.name, error: 'is_prop_firm' };
     }
 
-    return await createNewCreator(data, posts, signals, now);
+    return await createNew(data, posts, signals, now);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.error('pipeline.upsertCreator: exception', { name: data.name, error: msg });
+    log.error('pipeline.upsert: exception', { name: data.name, error: msg });
     return { action: 'skipped', creator_id: null, name: data.name, error: msg };
   }
 }
 
-// ─── Merge helper: only fill empty fields ───────────────────────────
-
-function mergeUrl(existing: string | null | undefined, discovered: string | null | undefined): string | null {
-  return existing || discovered || null;
-}
-
-function mergeBool(existing: boolean | undefined, discovered: boolean): boolean {
-  return existing || discovered;
-}
-
-// ─── Update path ────────────────────────────────────────────────────
-
-async function updateExistingCreator(
+async function updateExisting(
   existing: { creator_id: string; id: string },
-  data: DiscoveredCreator,
-  posts: DiscoveredPost[] | undefined,
-  signals: ReturnType<typeof analyzeText>,
-  now: string,
+  data: DiscoveredCreator, posts: DiscoveredPost[] | undefined,
+  signals: ReturnType<typeof analyzeText>, now: string,
 ): Promise<UpsertResult> {
   const creatorId = existing.creator_id;
-
-  const { data: current } = await supabaseAdmin
-    .from('creators').select('*').eq('id', creatorId).single();
-
-  if (!current) {
-    return { action: 'skipped', creator_id: creatorId, name: data.name, error: 'Creator record missing' };
-  }
+  const { data: current } = await supabaseAdmin.from('creators').select('*').eq('id', creatorId).single();
+  if (!current) return { action: 'skipped', creator_id: creatorId, name: data.name, error: 'missing' };
 
   const mergedFirms = [...new Set([...(current.prop_firms_mentioned ?? []), ...signals.propFirms])];
-
-  const { data: allAccounts } = await supabaseAdmin
-    .from('creator_accounts').select('followers, platform, verified').eq('creator_id', creatorId);
-
-  const accountsForScoring = (allAccounts ?? []).map(a =>
-    a.platform === data.account.platform ? { ...a, followers: data.account.followers } : a,
-  );
-  const totalFollowers = accountsForScoring.reduce((sum, a) => sum + (a.followers ?? 0), 0);
+  const { data: allAccounts } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', creatorId);
+  const accs = (allAccounts ?? []).map(a => a.platform === data.account.platform ? { ...a, followers: data.account.followers } : a);
+  const totalFollowers = accs.reduce((s, a) => s + (a.followers ?? 0), 0);
 
   const merged = {
     total_followers: totalFollowers,
@@ -232,153 +181,98 @@ async function updateExistingCreator(
     source_url: current.source_url || data.source_url || null,
   };
 
-  const leadScore = computeLeadScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
-  const confidenceScore = computeConfidenceScore({ creator: { ...current, ...merged }, accounts: accountsForScoring });
+  const leadScore = computeLeadScore({ creator: { ...current, ...merged }, accounts: accs });
+  const confidenceScore = computeConfidenceScore({ creator: { ...current, ...merged }, accounts: accs });
 
   await supabaseAdmin.from('creators').update({
-    ...merged,
-    lead_score: leadScore,
-    confidence_score: confidenceScore,
-    last_seen_at: now,
-    updated_at: now,
+    ...merged, lead_score: leadScore, confidence_score: confidenceScore,
+    last_seen_at: now, updated_at: now,
   }).eq('id', creatorId);
 
   await supabaseAdmin.from('creator_accounts').update({
-    followers: data.account.followers,
-    bio: data.account.bio,
-    verified: data.account.verified,
-    last_scraped_at: now,
-    updated_at: now,
+    followers: data.account.followers, bio: data.account.bio,
+    verified: data.account.verified, last_scraped_at: now, updated_at: now,
   }).eq('id', existing.id);
 
-  if (posts?.length) {
-    await upsertPosts(creatorId, existing.id, data.account.platform, posts);
-  }
-
-  log.info('pipeline.upsert: updated', { name: data.name, creator_id: creatorId, platform: data.account.platform });
+  if (posts?.length) await upsertPosts(creatorId, existing.id, data.account.platform, posts);
   return { action: 'updated', creator_id: creatorId, name: data.name };
 }
 
-// ─── Create path ────────────────────────────────────────────────────
-
-async function createNewCreator(
-  data: DiscoveredCreator,
-  posts: DiscoveredPost[] | undefined,
-  signals: ReturnType<typeof analyzeText>,
-  now: string,
+async function createNew(
+  data: DiscoveredCreator, posts: DiscoveredPost[] | undefined,
+  signals: ReturnType<typeof analyzeText>, now: string,
 ): Promise<UpsertResult> {
   let slug = data.slug;
-  const { data: slugOwner } = await supabaseAdmin
-    .from('creators').select('id, name').eq('slug', slug).maybeSingle();
+  const { data: owner } = await supabaseAdmin.from('creators').select('id, name').eq('slug', slug).maybeSingle();
 
-  if (slugOwner) {
-    if (slugOwner.name.toLowerCase() === data.name.toLowerCase()) {
-      // Same person — check if they already have this platform account
-      const creatorId = slugOwner.id;
-      const { data: existingAcc } = await supabaseAdmin
-        .from('creator_accounts')
-        .select('id')
-        .eq('creator_id', creatorId)
-        .eq('platform', data.account.platform)
-        .maybeSingle();
-
-      if (existingAcc) {
-        // Account already linked — just update it and bump timestamps
+  if (owner) {
+    if (owner.name.toLowerCase() === data.name.toLowerCase()) {
+      const { data: acc } = await supabaseAdmin.from('creator_accounts').select('id')
+        .eq('creator_id', owner.id).eq('platform', data.account.platform).maybeSingle();
+      if (acc) {
         await supabaseAdmin.from('creator_accounts').update({
           followers: data.account.followers, bio: data.account.bio,
           verified: data.account.verified, last_scraped_at: now, updated_at: now,
-        }).eq('id', existingAcc.id);
+        }).eq('id', acc.id);
       } else {
-        // New platform account for existing creator
         await supabaseAdmin.from('creator_accounts').insert({
-          creator_id: creatorId, platform: data.account.platform,
+          creator_id: owner.id, platform: data.account.platform,
           handle: data.account.handle, profile_url: data.account.profile_url,
           followers: data.account.followers, platform_id: data.account.platform_id,
           bio: data.account.bio, verified: data.account.verified, last_scraped_at: now,
         });
       }
-      await supabaseAdmin.from('creators').update({ last_seen_at: now, updated_at: now }).eq('id', creatorId);
-      log.info('pipeline.upsert: linked/updated account', { name: data.name, creator_id: creatorId, platform: data.account.platform });
-      return { action: 'updated', creator_id: creatorId, name: data.name };
+      await supabaseAdmin.from('creators').update({ last_seen_at: now, updated_at: now }).eq('id', owner.id);
+      return { action: 'updated', creator_id: owner.id, name: data.name };
     }
     slug = `${slug}-${data.account.platform}`;
   }
 
-  const creatorData = {
-    name: data.name,
-    slug,
-    website: data.website || null,
+  const rec = {
+    name: data.name, slug, website: data.website || null,
     total_followers: data.account.followers,
-    has_course: signals.hasCourse,
-    has_discord: signals.hasDiscord,
-    has_telegram: signals.hasTelegram,
-    has_skool: signals.has_skool,
-    has_whop: signals.has_whop,
-    promoting_prop_firms: signals.propFirms.length > 0,
-    prop_firms_mentioned: signals.propFirms,
-    instagram_url: signals.instagram_url,
-    linkedin_url: signals.linkedin_url,
-    youtube_url: signals.youtube_url,
-    x_url: signals.x_url,
-    discord_url: signals.discord_url,
-    telegram_url: signals.telegram_url,
-    link_in_bio_url: signals.link_in_bio_url,
-    course_url: signals.course_url,
+    has_course: signals.hasCourse, has_discord: signals.hasDiscord, has_telegram: signals.hasTelegram,
+    has_skool: signals.has_skool, has_whop: signals.has_whop,
+    promoting_prop_firms: signals.propFirms.length > 0, prop_firms_mentioned: signals.propFirms,
+    instagram_url: signals.instagram_url, linkedin_url: signals.linkedin_url,
+    youtube_url: signals.youtube_url, x_url: signals.x_url,
+    discord_url: signals.discord_url, telegram_url: signals.telegram_url,
+    link_in_bio_url: signals.link_in_bio_url, course_url: signals.course_url,
     primary_platform: data.account.platform,
-    source_type: data.source_type || null,
-    source_url: data.source_url || null,
-    lead_score: 0,
-    confidence_score: 0,
-    first_seen_at: now,
-    last_seen_at: now,
+    source_type: data.source_type || null, source_url: data.source_url || null,
+    lead_score: 0, confidence_score: 0, first_seen_at: now, last_seen_at: now,
   };
 
-  const leadScore = computeLeadScore({ creator: creatorData, accounts: [data.account] });
-  const confidenceScore = computeConfidenceScore({ creator: creatorData, accounts: [data.account] });
+  const ls = computeLeadScore({ creator: rec, accounts: [data.account] });
+  const cs = computeConfidenceScore({ creator: rec, accounts: [data.account] });
 
-  const { data: newCreator, error: insertErr } = await supabaseAdmin
-    .from('creators')
-    .insert({ ...creatorData, lead_score: leadScore, confidence_score: confidenceScore })
-    .select('id').single();
-
-  if (insertErr || !newCreator) {
-    return { action: 'skipped', creator_id: null, name: data.name, error: insertErr?.message ?? 'Insert failed' };
-  }
+  const { data: created, error } = await supabaseAdmin
+    .from('creators').insert({ ...rec, lead_score: ls, confidence_score: cs }).select('id').single();
+  if (error || !created) return { action: 'skipped', creator_id: null, name: data.name, error: error?.message ?? 'insert failed' };
 
   await supabaseAdmin.from('creator_accounts').insert({
-    creator_id: newCreator.id, platform: data.account.platform,
+    creator_id: created.id, platform: data.account.platform,
     handle: data.account.handle, profile_url: data.account.profile_url,
     followers: data.account.followers, platform_id: data.account.platform_id,
     bio: data.account.bio, verified: data.account.verified, last_scraped_at: now,
   });
 
-  if (posts?.length) {
-    await upsertPosts(newCreator.id, null, data.account.platform, posts);
-  }
-
-  log.info('pipeline.upsert: created', { name: data.name, creator_id: newCreator.id, platform: data.account.platform });
-  return { action: 'created', creator_id: newCreator.id, name: data.name };
+  if (posts?.length) await upsertPosts(created.id, null, data.account.platform, posts);
+  return { action: 'created', creator_id: created.id, name: data.name };
 }
-
-// ─── Post upsert ────────────────────────────────────────────────────
 
 async function upsertPosts(creatorId: string, accountId: string | null, platform: Platform, posts: DiscoveredPost[]) {
   for (const post of posts) {
     if (!post.post_url) continue;
-    const { data: existing } = await supabaseAdmin
-      .from('creator_posts').select('id').eq('post_url', post.post_url).maybeSingle();
-
+    const { data: ex } = await supabaseAdmin.from('creator_posts').select('id').eq('post_url', post.post_url).maybeSingle();
     const text = `${post.title ?? ''} ${post.content_snippet ?? ''}`;
-    if (existing) {
-      await supabaseAdmin.from('creator_posts').update({
-        views: post.views, likes: post.likes, comments: post.comments,
-      }).eq('id', existing.id);
+    if (ex) {
+      await supabaseAdmin.from('creator_posts').update({ views: post.views, likes: post.likes, comments: post.comments }).eq('id', ex.id);
     } else {
       await supabaseAdmin.from('creator_posts').insert({
         creator_id: creatorId, account_id: accountId, platform, post_url: post.post_url,
         title: post.title, content_snippet: post.content_snippet?.slice(0, 500),
-        views: post.views, likes: post.likes, comments: post.comments,
-        published_at: post.published_at,
+        views: post.views, likes: post.likes, comments: post.comments, published_at: post.published_at,
         mentions_prop_firm: detectPropFirmsFromSources(text).length > 0,
         mentions_course: COURSE_PATTERN.test(text),
       });
@@ -386,11 +280,8 @@ async function upsertPosts(creatorId: string, accountId: string | null, platform
   }
 }
 
-// ─── Discovery logging ──────────────────────────────────────────────
-
 export async function logDiscoveryRun(
-  platform: Platform, newCount: number, updatedCount: number,
-  errors: string[], status: 'completed' | 'failed',
+  platform: Platform, newCount: number, updatedCount: number, errors: string[], status: 'completed' | 'failed',
 ) {
   if (!isSupabaseConfigured()) return;
   await supabaseAdmin.from('daily_discoveries').insert({
