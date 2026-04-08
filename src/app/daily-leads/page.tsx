@@ -12,10 +12,15 @@ type CreatorWithAccounts = Creator & { accounts: CreatorAccount[] };
 type RefreshStatus = 'idle' | 'running' | 'success' | 'error';
 
 interface RefreshStats {
-  totalNew: number; totalUpdated: number; totalSkipped: number; totalErrors: number;
-  attempted: number; target: number; targetReached: boolean; reason: string;
-  enriched: number; emailsFound: number; phonesFound: number;
-  sources: { name: string; discovered: number; inserted: number }[];
+  attempted: number;
+  inserted: number;
+  duplicates: number;
+  rejected: number;
+  withEmail: number;
+  withPhone: number;
+  withForm: number;
+  excludedPropFirm: number;
+  errors: number;
   timestamp: string;
 }
 
@@ -42,55 +47,36 @@ function DailyLeadsContent() {
     setRefreshStatus('running');
     setRefreshError('');
 
-    // Run discovery + enrichment in sequential batches, each within Vercel 10s limit
-    // Enrich runs 5 rounds (3 creators each = 15 total) to maximize email extraction
     const batches = ['seeds_ig', 'seeds_li', 'youtube', 'enrich', 'enrich', 'enrich', 'enrich', 'enrich'];
-    const sources: { name: string; discovered: number; inserted: number }[] = [];
-    let totalNew = 0, totalUpdated = 0, totalErrors = 0, totalRejected = 0, attempted = 0;
-    let emailsFound = 0, phonesFound = 0;
+    let attempted = 0, inserted = 0, duplicates = 0, rejected = 0;
+    let withEmail = 0, withPhone = 0, withForm = 0, excludedPropFirm = 0, errors = 0;
 
     for (const batch of batches) {
       try {
         const res = await fetch(`/api/refresh-leads/batch?type=${batch}`, { method: 'POST' });
         let data;
         try { data = await res.json(); } catch { continue; }
-        if (!res.ok) { totalErrors++; continue; }
+        if (!res.ok) { errors++; continue; }
 
-        const disc = data.discovered ?? data.attempted ?? 0;
-        const ins = data.new ?? 0;
-        const upd = data.updated ?? 0;
-        const rej = data.rejected ?? 0;
-        attempted += disc;
-        totalNew += ins;
-        totalUpdated += upd;
-        totalRejected += rej;
-        if (data.errors) totalErrors += typeof data.errors === 'number' ? data.errors : 0;
-        if (data.emails) emailsFound += data.emails;
-        if (data.phones) phonesFound += data.phones;
-        if (disc > 0 || ins > 0) sources.push({ name: batch, discovered: disc, inserted: ins });
-      } catch {
-        totalErrors++;
-      }
-    }
-
-    const target = 500;
-    const targetReached = totalNew >= target;
-    let reason = '';
-    if (!targetReached) {
-      if (attempted === 0) reason = 'No sources returned results — check API keys';
-      else if (totalNew === 0) reason = `All ${attempted} candidates were duplicates`;
-      else reason = `Found ${attempted} candidates, ${totalNew} were new (rest already in DB)`;
+        attempted += data.discovered ?? data.attempted ?? 0;
+        inserted += data.new ?? 0;
+        duplicates += data.updated ?? 0;
+        rejected += data.rejected ?? 0;
+        excludedPropFirm += data.excluded_prop_firm ?? 0;
+        withEmail += data.emails ?? 0;
+        withPhone += data.phones ?? 0;
+        if (data.errors) errors += typeof data.errors === 'number' ? data.errors : 0;
+      } catch { errors++; }
     }
 
     setRefreshStats({
-      totalNew, totalUpdated, totalSkipped: totalRejected, totalErrors,
-      attempted, target, targetReached, reason,
-      enriched: 0, emailsFound, phonesFound, sources,
+      attempted, inserted, duplicates, rejected,
+      withEmail, withPhone, withForm, excludedPropFirm, errors,
       timestamp: new Date().toLocaleTimeString(),
     });
 
-    if (totalNew + totalUpdated > 0) setRefreshStatus('success');
-    else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} batch errors`); }
+    if (inserted + duplicates > 0) setRefreshStatus('success');
+    else if (errors > 0) { setRefreshStatus('error'); setRefreshError(`${errors} batch errors`); }
     else setRefreshStatus('success');
 
     fetchCreators();
@@ -132,33 +118,21 @@ function DailyLeadsContent() {
         <StatusBanner type="info"><Spinner /> Searching the internet for the best leads for you...</StatusBanner>
       )}
       {refreshStatus === 'success' && refreshStats && (
-        <div className="space-y-2">
-          <StatusBanner type="success">
-            <CheckIcon />
-            <div className="flex-1">
-              <div className="font-medium">
-                {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads inserted` : 'All leads up to date'}
-                {refreshStats.targetReached && ' \u2014 Target reached'}
-              </div>
-              <div className="mt-0.5 text-[12px] opacity-80">
-                Attempted: {refreshStats.attempted}
-                {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} dupes updated`}
-                {refreshStats.totalSkipped > 0 && ` \u00b7 ${refreshStats.totalSkipped} rejected`}
-                {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails`}
-                {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones`}
-              </div>
-              {refreshStats.sources.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-2 text-[11px] opacity-70">
-                  {refreshStats.sources.map(s => (
-                    <span key={s.name} className="capitalize">{s.name}: {s.inserted}/{s.discovered}</span>
-                  ))}
-                </div>
-              )}
-              {!refreshStats.targetReached && refreshStats.reason && (
-                <div className="mt-1 text-[11px] opacity-60">{refreshStats.reason}</div>
-              )}
+        <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9" style={{ background: 'var(--bg-card)' }}>
+            <MetricCell value={refreshStats.attempted} label="Attempted" />
+            <MetricCell value={refreshStats.inserted} label="Inserted" accent />
+            <MetricCell value={refreshStats.duplicates} label="Duplicates" />
+            <MetricCell value={refreshStats.rejected} label="Rejected" />
+            <MetricCell value={refreshStats.withEmail} label="With Email" accent />
+            <MetricCell value={refreshStats.withPhone} label="With Phone" />
+            <MetricCell value={refreshStats.withForm} label="Contact Form" />
+            <MetricCell value={refreshStats.excludedPropFirm} label="Prop Firms" />
+            <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+              <div className="text-[13px] font-mono" style={{ color: 'var(--text-secondary)' }}>{refreshStats.timestamp}</div>
+              <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>Last Refresh</div>
             </div>
-          </StatusBanner>
+          </div>
         </div>
       )}
       {refreshStatus === 'error' && refreshError && (
@@ -209,6 +183,15 @@ function Spinner({ large }: { large?: boolean }) {
 }
 function CheckIcon() { return <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>; }
 function ErrorIcon() { return <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>; }
+
+function MetricCell({ value, label, accent }: { value: number; label: string; accent?: boolean }) {
+  return (
+    <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
+      <div className="text-[16px] font-semibold tabular-nums" style={{ color: accent ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{value}</div>
+      <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
+    </div>
+  );
+}
 
 export default function DailyLeadsPage() {
   return <Suspense fallback={<div className="py-24 text-center" style={{ color: 'var(--text-muted)' }}>Loading...</div>}><DailyLeadsContent /></Suspense>;
