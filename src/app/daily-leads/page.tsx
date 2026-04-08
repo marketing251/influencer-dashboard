@@ -12,8 +12,11 @@ type CreatorWithAccounts = Creator & { accounts: CreatorAccount[] };
 type RefreshStatus = 'idle' | 'running' | 'success' | 'error';
 
 interface RefreshStats {
-  totalNew: number; totalUpdated: number; totalErrors: number;
-  skipped: string[]; enriched: number; emailsFound: number; phonesFound: number; timestamp: string;
+  totalNew: number; totalUpdated: number; totalSkipped: number; totalErrors: number;
+  attempted: number; target: number; targetReached: boolean; reason: string;
+  enriched: number; emailsFound: number; phonesFound: number;
+  sources: { name: string; discovered: number; inserted: number }[];
+  timestamp: string;
 }
 
 function DailyLeadsContent() {
@@ -43,10 +46,10 @@ function DailyLeadsContent() {
       const data = await res.json();
       if (!res.ok) { setRefreshStatus('error'); setRefreshError(data.error ?? `Failed (${res.status})`); return; }
 
-      // Use the new summary object if available, otherwise compute from platforms
       const s = data.summary ?? {};
       const totalNew = s.total_new ?? 0;
       const totalUpdated = s.total_updated ?? 0;
+      const totalSkipped = s.total_skipped ?? 0;
       const totalErrors = s.total_errors ?? 0;
       const targetReached = s.target_reached ?? false;
       const target = s.target ?? 100;
@@ -56,18 +59,28 @@ function DailyLeadsContent() {
       const emailsFound = data.enrichment?.emails_found ?? 0;
       const phonesFound = data.enrichment?.phones_found ?? 0;
 
-      // Collect skipped platforms
-      const skipped: string[] = [];
+      // Per-source breakdown
+      const sources: { name: string; discovered: number; inserted: number }[] = [];
+      let attempted = 0;
       for (const [name, result] of Object.entries(data.platforms ?? {})) {
-        const r = result as { skippedReason?: string } | null;
-        if (r?.skippedReason) skipped.push(name);
+        const r = result as { discovered?: number; new?: number; skippedReason?: string } | null;
+        if (!r || r.skippedReason) continue;
+        const disc = r.discovered ?? 0;
+        const ins = r.new ?? 0;
+        attempted += disc;
+        if (disc > 0) sources.push({ name, discovered: disc, inserted: ins });
       }
 
-      setRefreshStats({ totalNew, totalUpdated, totalErrors, skipped, enriched, emailsFound, phonesFound, timestamp: new Date().toLocaleTimeString() });
+      setRefreshStats({
+        totalNew, totalUpdated, totalSkipped, totalErrors,
+        attempted, target, targetReached, reason,
+        enriched, emailsFound, phonesFound, sources,
+        timestamp: new Date().toLocaleTimeString(),
+      });
 
       if (totalNew + totalUpdated > 0) setRefreshStatus('success');
-      else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} errors during discovery`); }
-      else { setRefreshStatus('success'); }
+      else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} errors`); }
+      else setRefreshStatus('success');
 
       fetchCreators();
       setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 10000);
@@ -112,14 +125,34 @@ function DailyLeadsContent() {
         <StatusBanner type="info"><Spinner /> Searching the internet for the best leads for you...</StatusBanner>
       )}
       {refreshStatus === 'success' && refreshStats && (
-        <StatusBanner type="success">
-          <CheckIcon />
-          {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads added` : 'All leads up to date'}
-          {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} duplicates updated`}
-          {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails`}
-          {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones`}
-          {refreshStats.skipped.length > 0 && ` \u00b7 ${refreshStats.skipped.join(', ')} skipped`}
-        </StatusBanner>
+        <div className="space-y-2">
+          <StatusBanner type="success">
+            <CheckIcon />
+            <div className="flex-1">
+              <div className="font-medium">
+                {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads inserted` : 'All leads up to date'}
+                {refreshStats.targetReached && ' \u2014 Target reached'}
+              </div>
+              <div className="mt-0.5 text-[12px] opacity-80">
+                Attempted: {refreshStats.attempted}
+                {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} dupes updated`}
+                {refreshStats.totalSkipped > 0 && ` \u00b7 ${refreshStats.totalSkipped} rejected`}
+                {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails`}
+                {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones`}
+              </div>
+              {refreshStats.sources.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] opacity-70">
+                  {refreshStats.sources.map(s => (
+                    <span key={s.name} className="capitalize">{s.name}: {s.inserted}/{s.discovered}</span>
+                  ))}
+                </div>
+              )}
+              {!refreshStats.targetReached && refreshStats.reason && (
+                <div className="mt-1 text-[11px] opacity-60">{refreshStats.reason}</div>
+              )}
+            </div>
+          </StatusBanner>
+        </div>
       )}
       {refreshStatus === 'error' && refreshError && (
         <StatusBanner type="error">
