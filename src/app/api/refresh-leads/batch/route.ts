@@ -4,10 +4,8 @@ import { upsertCreator, logDiscoveryRun } from '@/lib/pipeline';
 import { discoverYouTubeCreators } from '@/lib/integrations/youtube';
 import { discoverViaWebSearch } from '@/lib/integrations/web-search';
 import { fastEnrich } from '@/lib/integrations/fast-enrich';
-import { enrichFromWebsite } from '@/lib/integrations/website-enrichment';
 import { supabaseAdmin } from '@/lib/db';
 import { computeLeadScore, computeConfidenceScore } from '@/lib/scoring';
-import { extractAllSignals } from '@/lib/social-links';
 import { verifyCandidate } from '@/lib/verification';
 import { log } from '@/lib/logger';
 
@@ -156,49 +154,36 @@ async function runYouTube() {
   return { batch: 'youtube', discovered: discoveries.length, new: newCount, updated, rejected, excluded_prop_firm: excludedPropFirm, emails: enrichedEmail, errors };
 }
 
-// ─── Deep enrich: full website crawl for existing leads missing email ─
+// ─── Fast enrich: scan websites for email/phone (2 per batch within 10s) ─
 
 async function runEnrich() {
   if (!isSupabaseConfigured()) return { batch: 'enrich', attempted: 0, emails: 0, phones: 0 };
 
+  // Get leads with websites but no email, not excluded
   const { data: creators } = await supabaseAdmin
     .from('creators')
-    .select('id, website, public_email, public_phone, contact_form_url, prop_firms_mentioned')
+    .select('id, website, public_email, public_phone, contact_form_url')
     .not('website', 'is', null)
     .is('public_email', null)
     .neq('excluded_from_leads', true)
     .order('total_followers', { ascending: false })
-    .limit(3);
+    .limit(2); // 2 per batch × 4s each = 8s (fits 10s Vercel limit)
 
   let emails = 0, phones = 0;
 
   for (const creator of creators ?? []) {
     try {
-      const enrichment = await enrichFromWebsite(creator.website);
+      const result = await fastEnrich(creator.website);
       const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
       let changed = false;
 
-      if (enrichment.emails.length > 0 && !creator.public_email) { updates.public_email = enrichment.emails[0]; emails++; changed = true; }
-      if (enrichment.phones.length > 0 && !creator.public_phone) { updates.public_phone = enrichment.phones[0]; phones++; changed = true; }
-      if (enrichment.contact_form_url && !creator.contact_form_url) { updates.contact_form_url = enrichment.contact_form_url; changed = true; }
-      if (enrichment.has_course) { updates.has_course = true; changed = true; }
-      if (enrichment.has_discord) { updates.has_discord = true; changed = true; }
-      if (enrichment.has_telegram) { updates.has_telegram = true; changed = true; }
-      if (enrichment.prop_firms_mentioned.length > 0) {
-        updates.promoting_prop_firms = true;
-        updates.prop_firms_mentioned = [...new Set([...(creator.prop_firms_mentioned ?? []), ...enrichment.prop_firms_mentioned])];
-        changed = true;
-      }
-
-      const links = enrichment.social_links.map(l => l.url).join(' ');
-      const signals = extractAllSignals(links);
-      if (signals.instagram_url) { updates.instagram_url = signals.instagram_url; changed = true; }
-      if (signals.linkedin_url) { updates.linkedin_url = signals.linkedin_url; changed = true; }
-      if (signals.youtube_url) { updates.youtube_url = signals.youtube_url; changed = true; }
-      if (signals.x_url) { updates.x_url = signals.x_url; changed = true; }
+      if (result.email && !creator.public_email) { updates.public_email = result.email; emails++; changed = true; }
+      if (result.phone && !creator.public_phone) { updates.public_phone = result.phone; phones++; changed = true; }
+      if (result.contact_form_url && !creator.contact_form_url) { updates.contact_form_url = result.contact_form_url; changed = true; }
 
       if (changed) {
         await supabaseAdmin.from('creators').update(updates).eq('id', creator.id);
+        // Recalculate scores
         const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', creator.id).single();
         const { data: accs } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', creator.id);
         if (full) {

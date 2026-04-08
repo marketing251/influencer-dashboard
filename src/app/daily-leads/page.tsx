@@ -47,7 +47,10 @@ function DailyLeadsContent() {
     setRefreshStatus('running');
     setRefreshError('');
 
-    const batches = ['seeds_ig', 'seeds_li', 'youtube', 'enrich', 'enrich', 'enrich', 'enrich', 'enrich'];
+    // 3 discovery + 10 enrichment rounds (2 leads each = 20 enriched per refresh)
+    const batches = ['seeds_ig', 'seeds_li', 'youtube',
+      'enrich', 'enrich', 'enrich', 'enrich', 'enrich',
+      'enrich', 'enrich', 'enrich', 'enrich', 'enrich'];
     let attempted = 0, inserted = 0, duplicates = 0, rejected = 0;
     let withEmail = 0, withPhone = 0, withForm = 0, excludedPropFirm = 0, errors = 0;
 
