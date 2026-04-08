@@ -68,12 +68,15 @@ async function ytFetch<T>(endpoint: string, params: Record<string, string>): Pro
   return res.json() as Promise<T>;
 }
 
-async function searchChannels(query: string, maxResults: number) {
-  const data = await ytFetch<{ items?: YTSearchItem[]; nextPageToken?: string }>('search', {
+async function searchChannels(query: string, maxResults: number, pageToken?: string) {
+  const params: Record<string, string> = {
     part: 'snippet', type: 'channel', q: query,
     maxResults: String(maxResults), relevanceLanguage: 'en', order: 'relevance',
-  });
-  return [...new Set((data.items ?? []).map(i => i.id.channelId ?? i.snippet.channelId).filter(Boolean))];
+  };
+  if (pageToken) params.pageToken = pageToken;
+  const data = await ytFetch<{ items?: YTSearchItem[]; nextPageToken?: string }>('search', params);
+  const ids = [...new Set((data.items ?? []).map(i => i.id.channelId ?? i.snippet.channelId).filter(Boolean))];
+  return { ids, nextPageToken: data.nextPageToken ?? null };
 }
 
 async function getChannelDetails(ids: string[]): Promise<YouTubeChannel[]> {
@@ -122,19 +125,50 @@ export async function discoverYouTubeCreators(opts?: {
 
   const seenIds = new Set<string>();
   const allChannelIds: string[] = [];
+  let quotaExhausted = false;
 
+  // Round 1: first page of each query
   for (const query of TRADING_QUERIES) {
+    if (quotaExhausted) break;
     try {
-      const ids = await searchChannels(query, maxPerQuery);
+      const { ids } = await searchChannels(query, maxPerQuery);
       for (const id of ids) {
         if (!seenIds.has(id)) { seenIds.add(id); allChannelIds.push(id); }
       }
-      log.debug('youtube: query done', { query: query.slice(0, 30), found: ids.length, total: allChannelIds.length });
     } catch (err) {
-      if (String(err).includes('quota')) { log.warn('youtube: quota exceeded, stopping'); break; }
+      if (String(err).includes('quota')) { quotaExhausted = true; break; }
       log.warn('youtube: query failed', { query: query.slice(0, 30), error: String(err) });
     }
   }
+
+  // Round 2: page 2 of top queries (only if we have quota budget and need more)
+  if (!quotaExhausted && allChannelIds.length < 150) {
+    const pageTokens = new Map<string, string>();
+    for (const query of TRADING_QUERIES.slice(0, 10)) {
+      if (quotaExhausted) break;
+      try {
+        const { ids, nextPageToken } = await searchChannels(query, maxPerQuery);
+        // We already have page 1 results, but save token for page 2
+        if (nextPageToken) pageTokens.set(query, nextPageToken);
+      } catch (err) {
+        if (String(err).includes('quota')) { quotaExhausted = true; }
+      }
+    }
+    // Fetch page 2 for queries that had more results
+    for (const [query, token] of pageTokens) {
+      if (quotaExhausted) break;
+      try {
+        const { ids } = await searchChannels(query, maxPerQuery, token);
+        for (const id of ids) {
+          if (!seenIds.has(id)) { seenIds.add(id); allChannelIds.push(id); }
+        }
+      } catch (err) {
+        if (String(err).includes('quota')) { quotaExhausted = true; }
+      }
+    }
+  }
+
+  log.info('youtube: search done', { uniqueChannels: allChannelIds.length, quotaExhausted });
 
   log.info('youtube: search done', { uniqueChannels: allChannelIds.length });
   if (!allChannelIds.length) return [];

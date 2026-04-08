@@ -24,7 +24,15 @@ export interface DiscoverLeadsResult {
   completed_at: string;
   platforms: Record<string, PlatformResult>;
   enrichment: { attempted: number; enriched: number; emails_found: number; phones_found: number; errors: number };
-  /** Legacy accessors so existing UI code doesn't break. */
+  summary: {
+    total_new: number;
+    total_updated: number;
+    total_skipped: number;
+    total_errors: number;
+    target: number;
+    target_reached: boolean;
+    reason?: string;
+  };
   youtube: PlatformResult;
   x: PlatformResult;
 }
@@ -333,19 +341,33 @@ export async function discoverLeads(opts?: { skipEnrichment?: boolean; timeoutMs
 
   const completedAt = new Date().toISOString();
 
-  log.info('discoverLeads: completed', {
-    platforms: Object.fromEntries(
-      Object.entries(platformResults).map(([k, v]) => [k, { new: v.new, updated: v.updated }]),
-    ),
-    enriched: enrichmentResult.enriched,
-  });
+  // Compute summary across all providers
+  const TARGET = 100;
+  let totalNew = 0, totalUpdated = 0, totalSkipped = 0, totalErrors = 0;
+  for (const r of Object.values(platformResults)) {
+    totalNew += r.new;
+    totalUpdated += r.updated;
+    totalSkipped += r.skipped;
+    totalErrors += r.errors;
+  }
+
+  const targetReached = totalNew >= TARGET;
+  let reason: string | undefined;
+  if (!targetReached) {
+    const discovered = Object.values(platformResults).reduce((s, r) => s + r.discovered, 0);
+    if (discovered === 0) reason = 'No sources returned results — check API keys and quotas';
+    else if (totalNew + totalUpdated > 0) reason = `Found ${discovered} candidates but only ${totalNew} were new (${totalUpdated} already in DB)`;
+    else reason = `All ${discovered} discovered candidates were duplicates`;
+  }
+
+  log.info('discoverLeads: completed', { totalNew, totalUpdated, totalErrors, targetReached, enriched: enrichmentResult.enriched });
 
   return {
     started_at: startedAt,
     completed_at: completedAt,
     platforms: platformResults,
     enrichment: enrichmentResult,
-    // Legacy accessors for existing UI
+    summary: { total_new: totalNew, total_updated: totalUpdated, total_skipped: totalSkipped, total_errors: totalErrors, target: TARGET, target_reached: targetReached, reason },
     youtube: platformResults['youtube'] ?? skippedResult('YouTube provider not registered'),
     x: platformResults['x'] ?? skippedResult('X provider not registered'),
   };

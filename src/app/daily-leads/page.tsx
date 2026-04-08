@@ -43,25 +43,31 @@ function DailyLeadsContent() {
       const data = await res.json();
       if (!res.ok) { setRefreshStatus('error'); setRefreshError(data.error ?? `Failed (${res.status})`); return; }
 
-      const platforms = data.platforms ?? {};
-      let totalNew = 0, totalUpdated = 0, totalErrors = 0;
-      const skipped: string[] = [];
-      for (const [name, result] of Object.entries(platforms)) {
-        const r = result as { new?: number; updated?: number; errors?: number; skippedReason?: string } | null;
-        if (!r) continue;
-        if (r.skippedReason) { skipped.push(name); continue; }
-        totalNew += r.new ?? 0;
-        totalUpdated += r.updated ?? 0;
-        totalErrors += r.errors ?? 0;
-      }
+      // Use the new summary object if available, otherwise compute from platforms
+      const s = data.summary ?? {};
+      const totalNew = s.total_new ?? 0;
+      const totalUpdated = s.total_updated ?? 0;
+      const totalErrors = s.total_errors ?? 0;
+      const targetReached = s.target_reached ?? false;
+      const target = s.target ?? 100;
+      const reason = s.reason ?? '';
+
       const enriched = data.enrichment?.enriched ?? 0;
       const emailsFound = data.enrichment?.emails_found ?? 0;
       const phonesFound = data.enrichment?.phones_found ?? 0;
+
+      // Collect skipped platforms
+      const skipped: string[] = [];
+      for (const [name, result] of Object.entries(data.platforms ?? {})) {
+        const r = result as { skippedReason?: string } | null;
+        if (r?.skippedReason) skipped.push(name);
+      }
+
       setRefreshStats({ totalNew, totalUpdated, totalErrors, skipped, enriched, emailsFound, phonesFound, timestamp: new Date().toLocaleTimeString() });
 
       if (totalNew + totalUpdated > 0) setRefreshStatus('success');
       else if (totalErrors > 0) { setRefreshStatus('error'); setRefreshError(`${totalErrors} errors during discovery`); }
-      else setRefreshStatus('success');
+      else { setRefreshStatus('success'); }
 
       fetchCreators();
       setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 10000);
@@ -108,11 +114,10 @@ function DailyLeadsContent() {
       {refreshStatus === 'success' && refreshStats && (
         <StatusBanner type="success">
           <CheckIcon />
-          {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads` : 'All leads up to date'}
-          {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} updated`}
-          {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails found`}
-          {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones found`}
-          {refreshStats.enriched > 0 && ` \u00b7 ${refreshStats.enriched} enriched`}
+          {refreshStats.totalNew > 0 ? `${refreshStats.totalNew} new leads added` : 'All leads up to date'}
+          {refreshStats.totalUpdated > 0 && ` \u00b7 ${refreshStats.totalUpdated} duplicates updated`}
+          {refreshStats.emailsFound > 0 && ` \u00b7 ${refreshStats.emailsFound} emails`}
+          {refreshStats.phonesFound > 0 && ` \u00b7 ${refreshStats.phonesFound} phones`}
           {refreshStats.skipped.length > 0 && ` \u00b7 ${refreshStats.skipped.join(', ')} skipped`}
         </StatusBanner>
       )}
