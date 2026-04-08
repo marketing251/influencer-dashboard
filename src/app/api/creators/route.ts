@@ -34,11 +34,8 @@ export async function GET(request: NextRequest) {
 
   let query = supabase.from('creators').select('*, creator_accounts(*)');
 
-  // Exclude prop firms — requires migration: ALTER TABLE creators ADD COLUMN excluded_from_leads BOOLEAN DEFAULT FALSE;
-  // Only apply filter if the env flag is set (set after running migration)
-  if (process.env.PROP_FIRM_FILTER === 'true') {
-    query = query.neq('excluded_from_leads', true);
-  }
+  // Exclude prop firms from leads (we sell TO them, they're not prospects)
+  query = query.neq('excluded_from_leads', true);
 
   if (filters.platform) query = query.contains('creator_accounts.platform', [filters.platform]);
   if (filters.min_followers) query = query.gte('total_followers', filters.min_followers);
