@@ -9,6 +9,7 @@
  */
 
 import { log } from './logger';
+import { supabaseAdmin, isSupabaseConfigured } from './db';
 
 export interface PropFirmClassification {
   is_prop_firm: boolean;
@@ -19,26 +20,39 @@ export interface PropFirmClassification {
 // ─── Known prop firm EXACT brand names ──────────────────────────────
 // These are the official operating names of prop trading firms.
 // A lead whose name matches one of these (exactly or as a substring) is excluded.
-const KNOWN_FIRM_NAMES = [
-  'ftmo', 'myfundedfx', 'the5ers', 'fundednext', 'topstep',
-  'apex trader funding', 'surgetrader', 'e8 funding', 'e8funding',
-  'funded trading plus', 'alpha capital group', 'lux trading firm',
-  'city traders imperium', 'funding pips', 'fundingpips',
-  'elite trader funding', 'goat funded trader', 'blueberry funded',
-  'true forex funds', 'the trading pit', 'bulenox', 'uprofit',
-  'earn2trade', 'oneup trader', 'tradeday', 'maven trading',
-  'the funded trader', 'thefundedtrader', 'fundedtrader',
-  'funded trader markets',
+export const KNOWN_FIRM_NAMES = [
+  'ftmo', 'myfundedfx', 'my funded fx', 'the5ers', 'the 5ers', 'fundednext', 'funded next',
+  'topstep', 'topsteptrader', 'apex trader funding', 'apex funding', 'surgetrader', 'surge trader',
+  'e8 funding', 'e8funding', 'e8 markets', 'e8markets', 'funded trading plus',
+  'alpha capital group', 'lux trading firm', 'city traders imperium',
+  'funding pips', 'fundingpips', 'elite trader funding', 'goat funded trader',
+  'blueberry funded', 'true forex funds', 'trueforexfunds', 'the trading pit',
+  'bulenox', 'uprofit', 'earn2trade', 'oneup trader', 'tradeday', 'maven trading',
+  'the funded trader', 'thefundedtrader', 'fundedtrader', 'funded trader markets',
+  'my forex funds', 'myforexfunds', 'ftff', 'audacity capital',
+  'smart prop trader', 'smartproptrader', 'fund your fx', 'fundyourfx',
+  'forex capital funds', 'skilled funded trader', 'instant funding',
+  'breakout prop', 'breakoutprop', 'prop number one', '3task trader',
+  'for traders', 'fortraders', 'take profit trader', 'takeprofittrader',
+  'aqua funded', 'aquafunded', 'ff traders', 'fftraders',
+  'maven trading', 'hola prime', 'fxify', 'fx2funding', 'sabio trading',
 ];
 
 // ─── Known prop firm domains ────────────────────────────────────────
-const FIRM_DOMAINS = [
+export const FIRM_DOMAINS = [
   'ftmo.com', 'myfundedfx.com', 'the5ers.com', 'fundednext.com',
   'topstep.com', 'apextraderfunding.com', 'surgetrader.com',
-  'e8funding.com', 'fundedtradingplus.com', 'alphacapitalgroup.uk',
+  'e8funding.com', 'e8markets.com', 'fundedtradingplus.com', 'alphacapitalgroup.uk',
   'luxtradingfirm.com', 'citytradersimperium.com', 'fundingpips.com',
   'elitetraderfunding.com', 'goatfundedtrader.com', 'blueberryfunded.com',
   'trueforexfunds.com', 'thetradingpit.com', 'thefundedtrader.com',
+  'myforexfunds.com', 'ftff.com', 'audacitycapital.co.uk',
+  'smartproptrader.com', 'fundyourfx.com', 'forexcapitalfunds.com',
+  'breakoutprop.com', 'propnumberone.com', 'fortraders.com',
+  'takeprofittrader.com', 'aquafunded.com', 'fftraders.com',
+  'holaprime.com', 'fxify.com', 'fx2funding.com', 'sabiotrading.com',
+  'bulenox.com', 'uprofit.com', 'earn2trade.com', 'oneuptrader.com',
+  'tradeday.com', 'maventrading.com',
 ];
 
 // ─── Names/keywords that prove someone is NOT a prop firm ───────────
@@ -81,7 +95,6 @@ export function classifyPropFirm(input: {
   const nameLower = (input.name ?? '').toLowerCase().trim();
   const slugLower = (input.slug ?? '').toLowerCase().trim();
   const websiteLower = (input.website ?? '').toLowerCase().trim();
-  const combined = `${nameLower} ${slugLower}`;
 
   // SAFETY CHECK: if the name contains safe signals, it's likely an educator/reviewer
   for (const pattern of SAFE_SIGNALS) {
@@ -94,12 +107,11 @@ export function classifyPropFirm(input: {
   // Check 1: Name is a known firm brand
   for (const firm of KNOWN_FIRM_NAMES) {
     const normalized = firm.replace(/\s+/g, '');
-    // Exact match or starts with the firm name (catches "FTMO" but not "FTMOChallengeTips")
     if (
       nameLower === firm || nameLower === normalized ||
       slugLower === firm || slugLower === normalized ||
-      // The name IS the firm (not just mentions it)
-      nameLower.startsWith(firm + ' ') || nameLower.startsWith(normalized) && nameLower.length < normalized.length + 15
+      nameLower.startsWith(firm + ' ') ||
+      (nameLower.startsWith(normalized) && nameLower.length < normalized.length + 15)
     ) {
       score += 80;
       reasons.push(`Name matches firm: ${firm}`);
@@ -133,4 +145,47 @@ export function classifyPropFirm(input: {
  */
 export function isKnownPropFirm(name: string, slug?: string | null, website?: string | null): boolean {
   return classifyPropFirm({ name, slug, website }).is_prop_firm;
+}
+
+/**
+ * Back-fill `excluded_from_leads = true` on any existing rows that match
+ * the denylist. Runs once per refresh so freshly promoted firms disappear
+ * from lead queries without a full table scan.
+ *
+ * Returns the number of rows updated.
+ */
+export async function backfillPropFirmExclusion(): Promise<number> {
+  if (!isSupabaseConfigured()) return 0;
+  let total = 0;
+
+  // Update by exact name match (case-insensitive)
+  for (const firm of KNOWN_FIRM_NAMES) {
+    try {
+      const { count } = await supabaseAdmin
+        .from('creators')
+        .update({ excluded_from_leads: true, is_prop_firm: true }, { count: 'exact' })
+        .ilike('name', firm)
+        .neq('excluded_from_leads', true);
+      if (count) total += count;
+    } catch {
+      // ignore individual failures — backfill is best-effort
+    }
+  }
+
+  // Update by website domain
+  for (const domain of FIRM_DOMAINS) {
+    try {
+      const { count } = await supabaseAdmin
+        .from('creators')
+        .update({ excluded_from_leads: true, is_prop_firm: true }, { count: 'exact' })
+        .ilike('website', `%${domain}%`)
+        .neq('excluded_from_leads', true);
+      if (count) total += count;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (total > 0) log.info('prop-firm: backfill excluded rows', { total });
+  return total;
 }

@@ -21,8 +21,55 @@ interface RefreshStats {
   withForm: number;
   excludedPropFirm: number;
   errors: number;
+  elapsedSec: number;
   timestamp: string;
 }
+
+interface RefreshProgressEvent {
+  phase: string;
+  message?: string;
+  attempted?: number;
+  inserted?: number;
+  duplicates?: number;
+  rejected?: number;
+  with_email?: number;
+  with_phone?: number;
+  with_form?: number;
+  excluded_prop_firm?: number;
+  errors?: number;
+  batch_index?: number;
+  batch_total?: number;
+  elapsed_ms?: number;
+  remaining_ms?: number;
+  time_budget_ms?: number;
+  stopped_reason?: string;
+  email_rate?: number;
+  error?: string;
+}
+
+interface ProgressState {
+  phase: string;
+  message: string;
+  batchIndex: number;
+  batchTotal: number;
+  inserted: number;
+  withEmail: number;
+  elapsedMs: number;
+  remainingMs: number;
+  timeBudgetMs: number;
+}
+
+const INITIAL_PROGRESS: ProgressState = {
+  phase: 'init',
+  message: 'Starting refresh…',
+  batchIndex: 0,
+  batchTotal: 0,
+  inserted: 0,
+  withEmail: 0,
+  elapsedMs: 0,
+  remainingMs: 270_000,
+  timeBudgetMs: 270_000,
+};
 
 function DailyLeadsContent() {
   const searchParams = useSearchParams();
@@ -32,6 +79,7 @@ function DailyLeadsContent() {
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>('idle');
   const [refreshStats, setRefreshStats] = useState<RefreshStats | null>(null);
   const [refreshError, setRefreshError] = useState('');
+  const [progress, setProgress] = useState<ProgressState>(INITIAL_PROGRESS);
 
   const fetchCreators = useCallback(() => {
     setLoading(true);
@@ -46,44 +94,103 @@ function DailyLeadsContent() {
   const handleRefresh = async () => {
     setRefreshStatus('running');
     setRefreshError('');
+    setProgress(INITIAL_PROGRESS);
 
-    // 3 discovery + 10 enrichment rounds (2 leads each = 20 enriched per refresh)
-    const batches = ['seeds_ig', 'seeds_li', 'youtube',
-      'enrich', 'enrich', 'enrich', 'enrich', 'enrich',
-      'enrich', 'enrich', 'enrich', 'enrich', 'enrich'];
-    let attempted = 0, inserted = 0, duplicates = 0, rejected = 0;
-    let withEmail = 0, withPhone = 0, withForm = 0, excludedPropFirm = 0, errors = 0;
+    let lastEvent: RefreshProgressEvent | null = null;
 
-    for (const batch of batches) {
-      try {
-        const res = await fetch(`/api/refresh-leads/batch?type=${batch}`, { method: 'POST' });
-        let data;
-        try { data = await res.json(); } catch { continue; }
-        if (!res.ok) { errors++; continue; }
+    try {
+      const res = await fetch('/api/refresh-leads?stream=1', { method: 'POST' });
+      if (!res.ok || !res.body) {
+        const msg = `Refresh failed (${res.status})`;
+        setRefreshError(msg);
+        setRefreshStatus('error');
+        return;
+      }
 
-        attempted += data.discovered ?? data.attempted ?? 0;
-        inserted += data.new ?? 0;
-        duplicates += data.updated ?? 0;
-        rejected += data.rejected ?? 0;
-        excludedPropFirm += data.excluded_prop_firm ?? 0;
-        withEmail += data.emails ?? 0;
-        withPhone += data.phones ?? 0;
-        if (data.errors) errors += typeof data.errors === 'number' ? data.errors : 0;
-      } catch { errors++; }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let nlIdx = buffer.indexOf('\n');
+        while (nlIdx !== -1) {
+          const line = buffer.slice(0, nlIdx).trim();
+          buffer = buffer.slice(nlIdx + 1);
+          nlIdx = buffer.indexOf('\n');
+          if (!line) continue;
+          try {
+            const event = JSON.parse(line) as RefreshProgressEvent;
+            lastEvent = event;
+            setProgress({
+              phase: event.phase ?? 'running',
+              message: event.message ?? '',
+              batchIndex: event.batch_index ?? 0,
+              batchTotal: event.batch_total ?? 0,
+              inserted: event.inserted ?? 0,
+              withEmail: event.with_email ?? 0,
+              elapsedMs: event.elapsed_ms ?? 0,
+              remainingMs: event.remaining_ms ?? 0,
+              timeBudgetMs: event.time_budget_ms ?? 270_000,
+            });
+          } catch {
+            // Ignore malformed lines — stream keeps going
+          }
+        }
+      }
+
+      // Flush any trailing JSON left in the buffer
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer.trim()) as RefreshProgressEvent;
+          lastEvent = event;
+        } catch { /* ignore */ }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      setRefreshError(msg);
+      setRefreshStatus('error');
+      return;
     }
 
-    setRefreshStats({
-      attempted, inserted, duplicates, rejected,
-      withEmail, withPhone, withForm, excludedPropFirm, errors,
-      timestamp: new Date().toLocaleTimeString(),
-    });
+    if (!lastEvent) {
+      setRefreshError('No response from refresh pipeline');
+      setRefreshStatus('error');
+      return;
+    }
 
-    if (inserted + duplicates > 0) setRefreshStatus('success');
-    else if (errors > 0) { setRefreshStatus('error'); setRefreshError(`${errors} batch errors`); }
-    else setRefreshStatus('success');
+    const stats: RefreshStats = {
+      attempted: lastEvent.attempted ?? 0,
+      inserted: lastEvent.inserted ?? 0,
+      duplicates: lastEvent.duplicates ?? 0,
+      rejected: lastEvent.rejected ?? 0,
+      withEmail: lastEvent.with_email ?? 0,
+      withPhone: lastEvent.with_phone ?? 0,
+      withForm: lastEvent.with_form ?? 0,
+      excludedPropFirm: lastEvent.excluded_prop_firm ?? 0,
+      errors: lastEvent.errors ?? 0,
+      elapsedSec: Math.round((lastEvent.elapsed_ms ?? 0) / 1000),
+      timestamp: new Date().toLocaleTimeString(),
+    };
+    setRefreshStats(stats);
+
+    if (lastEvent.error) {
+      setRefreshStatus('error');
+      setRefreshError(lastEvent.error);
+    } else if (stats.inserted + stats.duplicates > 0 || stats.attempted > 0) {
+      setRefreshStatus('success');
+    } else if (stats.errors > 0) {
+      setRefreshStatus('error');
+      setRefreshError(`${stats.errors} pipeline errors`);
+    } else {
+      setRefreshStatus('success');
+    }
 
     fetchCreators();
-    setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 12000);
+    setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 15000);
   };
 
   return (
@@ -118,7 +225,7 @@ function DailyLeadsContent() {
 
       {/* ── Status banners ── */}
       {refreshStatus === 'running' && (
-        <StatusBanner type="info"><Spinner /> Searching the internet for the best leads for you...</StatusBanner>
+        <RefreshProgressBanner progress={progress} />
       )}
       {refreshStatus === 'success' && refreshStats && (
         <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
@@ -126,14 +233,14 @@ function DailyLeadsContent() {
             <MetricCell value={refreshStats.attempted} label="Attempted" />
             <MetricCell value={refreshStats.inserted} label="Inserted" accent />
             <MetricCell value={refreshStats.duplicates} label="Duplicates" />
-            <MetricCell value={refreshStats.rejected} label="Rejected" />
             <MetricCell value={refreshStats.withEmail} label="With Email" accent />
             <MetricCell value={refreshStats.withPhone} label="With Phone" />
             <MetricCell value={refreshStats.withForm} label="Contact Form" />
+            <MetricCell value={refreshStats.rejected} label="Rejected" />
             <MetricCell value={refreshStats.excludedPropFirm} label="Prop Firms" />
             <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-              <div className="text-[13px] font-mono" style={{ color: 'var(--text-secondary)' }}>{refreshStats.timestamp}</div>
-              <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>Last Refresh</div>
+              <div className="text-[13px] font-mono" style={{ color: 'var(--text-secondary)' }}>{refreshStats.elapsedSec}s</div>
+              <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
             </div>
           </div>
         </div>
@@ -184,7 +291,6 @@ function StatusBanner({ children, type }: { children: React.ReactNode; type: 'in
 function Spinner({ large }: { large?: boolean }) {
   return <div className={`${large ? 'h-7 w-7 border-[2.5px]' : 'h-3.5 w-3.5 border-2'} animate-spin rounded-full`} style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />;
 }
-function CheckIcon() { return <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>; }
 function ErrorIcon() { return <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>; }
 
 function MetricCell({ value, label, accent }: { value: number; label: string; accent?: boolean }) {
@@ -192,6 +298,54 @@ function MetricCell({ value, label, accent }: { value: number; label: string; ac
     <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
       <div className="text-[16px] font-semibold tabular-nums" style={{ color: accent ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{value}</div>
       <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
+    </div>
+  );
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  init: 'Starting',
+  backfill_exclusion: 'Cleaning prop-firm exclusions',
+  discovery: 'Discovering candidates',
+  dedup: 'Deduplicating',
+  enrichment: 'Extracting contacts',
+  followup_enrichment: 'Re-enriching saved leads',
+  done: 'Finishing up',
+};
+
+function RefreshProgressBanner({ progress }: { progress: ProgressState }) {
+  const pct = progress.timeBudgetMs > 0
+    ? Math.min(100, Math.round((progress.elapsedMs / progress.timeBudgetMs) * 100))
+    : 0;
+  const elapsedSec = Math.max(0, Math.round(progress.elapsedMs / 1000));
+  const remainingSec = Math.max(0, Math.round(progress.remainingMs / 1000));
+  const phaseLabel = PHASE_LABELS[progress.phase] ?? progress.phase;
+  const batchLabel = progress.batchTotal > 0
+    ? `Batch ${progress.batchIndex} / ${progress.batchTotal}`
+    : progress.message || phaseLabel;
+
+  return (
+    <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <Spinner />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[13px] font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>{phaseLabel}</span>
+            <span className="text-[12px] truncate" style={{ color: 'var(--text-muted)' }}>{batchLabel}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-3 text-[11px] font-mono" style={{ color: 'var(--text-muted)' }}>
+            <span>{elapsedSec}s elapsed</span>
+            <span>&middot;</span>
+            <span>{remainingSec}s left</span>
+            <span>&middot;</span>
+            <span>{progress.inserted} inserted</span>
+            <span>&middot;</span>
+            <span>{progress.withEmail} with email</span>
+          </div>
+        </div>
+      </div>
+      <div className="h-1 w-full" style={{ background: 'var(--border-subtle)' }}>
+        <div className="h-full transition-all duration-500" style={{ width: `${pct}%`, background: 'var(--accent-gold)' }} />
+      </div>
     </div>
   );
 }

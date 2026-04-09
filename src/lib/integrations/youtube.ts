@@ -1,7 +1,12 @@
 /**
- * YouTube Data API v3 — scaled for 500+ lead discovery.
- * 60 search queries × 10 results + pagination = 400-600 unique channels.
- * Quota: 10,000 units/day (search=100, channels=1 per batch of 50).
+ * YouTube Data API v3 — scaled for 500+ lead discovery on Vercel Pro.
+ *
+ * Keyword groups allow the refresh pipeline to cycle through distinct niches.
+ * Each search costs 100 quota units; channels batch lookups cost 1 per 50.
+ * Daily quota is 10,000 units.
+ *
+ * With all groups enabled (~45 queries) a single refresh spends ~4,500 units,
+ * which still leaves headroom for the scheduled daily-refresh cron.
  */
 
 import { log } from '../logger';
@@ -24,32 +29,76 @@ export interface YouTubeChannel {
 
 export interface YouTubeDiscoveryResult { creator: DiscoveredCreator; posts: DiscoveredPost[] }
 
-// 15 high-yield queries — fits within Vercel Hobby 10s timeout
-// Each costs 100 quota units. 15 queries = 1,500 units (within 10K daily).
-// Designed for maximum unique channel diversity per query.
-const QUERIES = [
-  'forex trading education course',
-  'prop firm funded trader FTMO challenge',
-  'day trading live stream education',
-  'smart money ICT order block trading',
-  'futures trading NQ ES scalping',
-  'options trading strategy course',
-  'crypto bitcoin trading education',
-  'swing trading strategy course',
-  'trading mentor coaching discord',
-  'funded trader results payout proof',
-  'forex signals community mentor',
-  'penny stock day trading education',
-  'trading psychology mindset education',
-  'prop firm passing strategy funded',
-  'best traders to follow youtube 2024',
-];
+// ─── Keyword groups (each refresh can select a subset) ──────────────
 
-async function ytFetch<T>(endpoint: string, params: Record<string, string>): Promise<T> {
+export const YOUTUBE_KEYWORD_GROUPS = {
+  forex: [
+    'forex trading education course',
+    'forex signals mentor community',
+    'forex trader journey funded',
+    'price action forex trader',
+    'swing trading forex strategy',
+  ],
+  prop_firm: [
+    'prop firm funded trader FTMO challenge',
+    'prop firm passing strategy funded',
+    'funded trader results payout proof',
+    'prop firm review funded account',
+    'funded trader journey FTMO payout',
+  ],
+  day_trading: [
+    'day trading live stream education',
+    'day trading strategy beginner',
+    'day trading psychology mindset',
+    'scalping strategy day trader',
+  ],
+  smart_money: [
+    'smart money ICT order block trading',
+    'inner circle trader ICT concepts',
+    'liquidity sweep order flow trading',
+  ],
+  futures: [
+    'futures trading NQ ES scalping',
+    'micro futures day trader education',
+  ],
+  options: [
+    'options trading strategy course',
+    'options trader coach mentor',
+    'options iron condor spreads education',
+  ],
+  crypto: [
+    'crypto bitcoin trading education',
+    'crypto altcoin swing trading',
+    'crypto mentor signals community',
+  ],
+  stocks: [
+    'penny stock day trading education',
+    'swing trading stocks strategy',
+    'stock market trader mentor',
+  ],
+  mentor: [
+    'trading mentor coaching discord',
+    'trading academy course mentorship',
+    'best traders to follow 2025',
+    'trading bootcamp online education',
+  ],
+} as const;
+
+export type YouTubeKeywordGroup = keyof typeof YOUTUBE_KEYWORD_GROUPS;
+
+export const ALL_YOUTUBE_GROUPS: YouTubeKeywordGroup[] = Object.keys(YOUTUBE_KEYWORD_GROUPS) as YouTubeKeywordGroup[];
+
+function buildQueries(groups: readonly YouTubeKeywordGroup[]): string[] {
+  const out: string[] = [];
+  for (const g of groups) out.push(...YOUTUBE_KEYWORD_GROUPS[g]);
+  return [...new Set(out)];
+}
+
+async function ytFetch<T>(endpoint: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const url = new URL(`${BASE}/${endpoint}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   url.searchParams.set('key', key());
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), { signal });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     if (res.status === 403 && body.includes('quotaExceeded')) throw new Error('QUOTA_EXCEEDED');
@@ -58,16 +107,16 @@ async function ytFetch<T>(endpoint: string, params: Record<string, string>): Pro
   return res.json() as Promise<T>;
 }
 
-async function search(query: string, max: number, pageToken?: string) {
+async function search(query: string, max: number, pageToken?: string, signal?: AbortSignal) {
   const p: Record<string, string> = { part: 'snippet', type: 'channel', q: query, maxResults: String(max), relevanceLanguage: 'en', order: 'relevance' };
   if (pageToken) p.pageToken = pageToken;
-  const d = await ytFetch<{ items?: YTSearchItem[]; nextPageToken?: string }>('search', p);
+  const d = await ytFetch<{ items?: YTSearchItem[]; nextPageToken?: string }>('search', p, signal);
   return { ids: [...new Set((d.items ?? []).map(i => i.id.channelId ?? i.snippet.channelId).filter(Boolean))], next: d.nextPageToken ?? null };
 }
 
-async function details(ids: string[]): Promise<YouTubeChannel[]> {
+async function details(ids: string[], signal?: AbortSignal): Promise<YouTubeChannel[]> {
   if (!ids.length) return [];
-  const d = await ytFetch<{ items?: YTChannelItem[] }>('channels', { part: 'snippet,statistics', id: ids.join(',') });
+  const d = await ytFetch<{ items?: YTChannelItem[] }>('channels', { part: 'snippet,statistics', id: ids.join(',') }, signal);
   return (d.items ?? []).map(c => ({
     id: c.id, title: c.snippet.title, description: c.snippet.description ?? '',
     customUrl: c.snippet.customUrl ?? '',
@@ -97,47 +146,100 @@ function toCreator(ch: YouTubeChannel): YouTubeDiscoveryResult {
   };
 }
 
-export async function discoverYouTubeCreators(opts?: {
-  maxPerQuery?: number; minSubscribers?: number; maxPages?: number;
-}): Promise<YouTubeDiscoveryResult[]> {
-  const { maxPerQuery = 10, minSubscribers = 500, maxPages = 1 } = opts ?? {};
+/** Run N async tasks with a concurrency limit. */
+async function pLimitAll<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      try {
+        out[idx] = await fn(items[idx]);
+      } catch {
+        // caller handles errors per-item
+      }
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+export interface DiscoverYouTubeOpts {
+  /** Keyword groups to include. Defaults to all groups. */
+  groups?: readonly YouTubeKeywordGroup[];
+  /** Custom query list (overrides groups). */
+  queries?: string[];
+  /** Max search results per query (default 10, max 50). */
+  maxPerQuery?: number;
+  /** Drop channels below this subscriber count. */
+  minSubscribers?: number;
+  /** Fetch a second search page for each query once first pass is done. */
+  secondPage?: boolean;
+  /** Abort signal — propagates to all in-flight fetches. */
+  signal?: AbortSignal;
+  /** Parallel search fan-out (default 6). YouTube accepts bursty traffic fine. */
+  concurrency?: number;
+}
+
+export async function discoverYouTubeCreators(opts?: DiscoverYouTubeOpts): Promise<YouTubeDiscoveryResult[]> {
+  const {
+    groups = ALL_YOUTUBE_GROUPS,
+    queries,
+    maxPerQuery = 10,
+    minSubscribers = 500,
+    secondPage = false,
+    signal,
+    concurrency = 6,
+  } = opts ?? {};
+
+  const queryList = queries ?? buildQueries(groups);
   const seen = new Set<string>();
-  const all: string[] = [];
   let quota = false;
 
-  // Page 1 of all queries
-  for (const q of QUERIES) {
-    if (quota) break;
+  // Phase 1: parallel first pages
+  const firstPage = await pLimitAll(queryList, concurrency, async q => {
+    if (quota || signal?.aborted) return { ids: [] as string[], next: null as string | null };
     try {
-      const { ids } = await search(q, maxPerQuery);
-      for (const id of ids) { if (!seen.has(id)) { seen.add(id); all.push(id); } }
-    } catch (e) { if (String(e).includes('QUOTA')) { quota = true; break; } }
-  }
-
-  // Page 2+ for top queries if we need more and have quota
-  if (!quota && maxPages >= 2 && all.length < 400) {
-    for (const q of QUERIES.slice(0, 20)) {
-      if (quota) break;
-      try {
-        const p1 = await search(q, maxPerQuery);
-        if (p1.next) {
-          const p2 = await search(q, maxPerQuery, p1.next);
-          for (const id of p2.ids) { if (!seen.has(id)) { seen.add(id); all.push(id); } }
-        }
-      } catch (e) { if (String(e).includes('QUOTA')) { quota = true; } }
+      return await search(q, maxPerQuery, undefined, signal);
+    } catch (e) {
+      if (String(e).includes('QUOTA')) quota = true;
+      return { ids: [], next: null };
     }
+  });
+
+  for (const r of firstPage) for (const id of r.ids) seen.add(id);
+
+  // Phase 2: optional second page (for denser coverage on the top queries)
+  if (!quota && secondPage && seen.size < 500) {
+    await pLimitAll(queryList.slice(0, Math.min(20, queryList.length)), concurrency, async q => {
+      if (quota || signal?.aborted) return;
+      try {
+        const p1 = await search(q, maxPerQuery, undefined, signal);
+        if (!p1.next) return;
+        const p2 = await search(q, maxPerQuery, p1.next, signal);
+        for (const id of p2.ids) seen.add(id);
+      } catch (e) {
+        if (String(e).includes('QUOTA')) quota = true;
+      }
+    });
   }
 
-  log.info('youtube: search done', { unique: all.length, queries: QUERIES.length, quota });
+  const allIds = [...seen];
+  log.info('youtube: search done', { unique: allIds.length, queries: queryList.length, quota });
 
-  // Batch channel details (50 per call)
-  const channels: YouTubeChannel[] = [];
-  for (let i = 0; i < all.length; i += 50) {
-    try { channels.push(...await details(all.slice(i, i + 50))); }
-    catch { /* skip failed batch */ }
-  }
+  // Phase 3: batch channel lookups (50/call) in parallel
+  const idBatches: string[][] = [];
+  for (let i = 0; i < allIds.length; i += 50) idBatches.push(allIds.slice(i, i + 50));
 
+  const channelBatches = await pLimitAll(idBatches, 4, async batch => {
+    if (signal?.aborted) return [] as YouTubeChannel[];
+    try { return await details(batch, signal); }
+    catch { return [] as YouTubeChannel[]; }
+  });
+
+  const channels = channelBatches.flat();
   const qualified = channels.filter(c => c.subscriberCount >= minSubscribers);
   log.info('youtube: complete', { fetched: channels.length, qualified: qualified.length });
+
   return qualified.map(toCreator);
 }

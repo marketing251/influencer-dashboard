@@ -14,7 +14,7 @@ export const youtubeProvider: DiscoveryProvider = {
     return discoverYouTubeCreators({
       maxPerQuery: 10,
       minSubscribers: 500,
-      maxPages: 1,  // single page per query (fits Vercel Hobby 10s limit)
+      secondPage: false,  // single page per query (fits Vercel Hobby 10s limit)
     });
   },
 

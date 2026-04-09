@@ -109,7 +109,7 @@ async function runYouTube() {
     return { batch: 'youtube', discovered: 0, new: 0, updated: 0, errors: 0, skipped: 'No YOUTUBE_API_KEY' };
   }
 
-  const discoveries = await discoverYouTubeCreators({ maxPerQuery: 10, minSubscribers: 500, maxPages: 1 });
+  const discoveries = await discoverYouTubeCreators({ maxPerQuery: 10, minSubscribers: 500, secondPage: false });
   let newCount = 0, updated = 0, errors = 0, rejected = 0, excludedPropFirm = 0, enrichedEmail = 0;
 
   // Sort: creators with websites first
