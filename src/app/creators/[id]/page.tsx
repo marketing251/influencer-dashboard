@@ -11,6 +11,14 @@ function fmt(n: number) {
   return String(n);
 }
 
+/** Follower-specific formatter: shows — for 0/unknown, so IG/LinkedIn
+ * leads sourced via web search (where we can't get real counts) don't
+ * misleadingly display "0 followers". */
+function fmtFollowers(n: number | null | undefined) {
+  if (!n || n <= 0) return '—';
+  return fmt(n);
+}
+
 export default function CreatorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [creator, setCreator] = useState<CreatorDetail | null>(null);
@@ -52,7 +60,7 @@ export default function CreatorDetailPage() {
           </Section>
 
           <Section title="Stats">
-            <Field label="Total Followers" value={fmt(creator.total_followers)} />
+            <Field label="Total Followers" value={fmtFollowers(creator.total_followers)} />
             <Field label="Primary Platform" value={creator.primary_platform} />
             <Field label="Niche" value={creator.niche} />
             <Field label="Source" value={creator.source_type} />
@@ -104,7 +112,7 @@ export default function CreatorDetailPage() {
                       <span className="text-sm" style={{ color: 'var(--text-primary)' }}>@{acc.handle}</span>
                       {acc.verified && <span className="text-xs" style={{ color: 'var(--accent)' }}>Verified</span>}
                     </div>
-                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>{fmt(acc.followers)}</div>
+                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>{fmtFollowers(acc.followers)}</div>
                   </div>
                 ))}
               </div>

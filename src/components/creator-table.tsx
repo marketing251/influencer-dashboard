@@ -3,7 +3,13 @@ import type { Creator, CreatorAccount } from '@/lib/types';
 
 interface Props { creators: (Creator & { accounts: CreatorAccount[] })[] }
 
-function fmt(n: number) { return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(0)}K` : String(n); }
+function fmt(n: number) {
+  // 0 usually means "unknown" for IG/LinkedIn leads sourced via web search
+  // (those platforms don't expose follower counts without auth). Render a
+  // dash instead so the UI doesn't imply the creator has literally zero fans.
+  if (!n || n <= 0) return '—';
+  return n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(0)}K` : String(n);
+}
 function relDate(iso: string) {
   if (!iso) return '';
   const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);

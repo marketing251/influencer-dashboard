@@ -11,6 +11,10 @@ const platformIcons: Record<string, string> = {
 };
 
 function formatFollowers(n: number) {
+  // 0 usually means "unknown" for IG/LinkedIn leads sourced via web search
+  // (those platforms don't expose follower counts without auth). Render a
+  // dash instead so the UI doesn't imply the creator has literally zero fans.
+  if (!n || n <= 0) return '—';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
   return String(n);
@@ -25,7 +29,7 @@ export function CreatorCard({ creator }: Props) {
         <div>
           <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>{creator.name}</h3>
           <p className="mt-0.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-            {formatFollowers(creator.total_followers)} followers
+            {creator.total_followers > 0 ? `${formatFollowers(creator.total_followers)} followers` : 'Followers unknown'}
           </p>
         </div>
         <div className="flex items-center gap-2">
