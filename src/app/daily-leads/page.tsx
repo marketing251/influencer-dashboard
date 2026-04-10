@@ -80,6 +80,13 @@ const INITIAL_PROGRESS: ProgressState = {
   sources: {},
 };
 
+interface DiagnoseReport {
+  ok: boolean;
+  ts: string;
+  env: Record<string, boolean>;
+  sources: Record<string, { status: 'ok' | 'error' | 'skipped'; message: string; duration_ms: number; sample?: unknown }>;
+}
+
 function DailyLeadsContent() {
   const searchParams = useSearchParams();
   const [creators, setCreators] = useState<CreatorWithAccounts[]>([]);
@@ -89,6 +96,8 @@ function DailyLeadsContent() {
   const [refreshStats, setRefreshStats] = useState<RefreshStats | null>(null);
   const [refreshError, setRefreshError] = useState('');
   const [progress, setProgress] = useState<ProgressState>(INITIAL_PROGRESS);
+  const [diagnose, setDiagnose] = useState<DiagnoseReport | null>(null);
+  const [diagnoseStatus, setDiagnoseStatus] = useState<'idle' | 'running' | 'done'>('idle');
 
   const fetchCreators = useCallback(() => {
     setLoading(true);
@@ -204,6 +213,35 @@ function DailyLeadsContent() {
     setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 15000);
   };
 
+  const handleDiagnose = async () => {
+    setDiagnoseStatus('running');
+    setDiagnose(null);
+    try {
+      const res = await fetch('/api/refresh-leads/diagnose');
+      if (!res.ok) {
+        setDiagnoseStatus('done');
+        setDiagnose({
+          ok: false,
+          ts: new Date().toISOString(),
+          env: {},
+          sources: { request: { status: 'error', message: `HTTP ${res.status}`, duration_ms: 0 } },
+        });
+        return;
+      }
+      const data = (await res.json()) as DiagnoseReport;
+      setDiagnose(data);
+      setDiagnoseStatus('done');
+    } catch (err) {
+      setDiagnose({
+        ok: false,
+        ts: new Date().toISOString(),
+        env: {},
+        sources: { network: { status: 'error', message: err instanceof Error ? err.message : String(err), duration_ms: 0 } },
+      });
+      setDiagnoseStatus('done');
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* ── Header ── */}
@@ -223,6 +261,17 @@ function DailyLeadsContent() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
             </svg>
             {refreshStatus === 'running' ? 'Searching...' : 'Refresh Leads'}
+          </button>
+          <button
+            onClick={handleDiagnose}
+            disabled={diagnoseStatus === 'running'}
+            title="Run a lightweight call against every discovery source and show which ones are working"
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius)] px-3 py-2 text-[12px] font-medium transition-all disabled:opacity-50"
+            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', border: '1px solid var(--border)' }}>
+            <svg className={`h-3.5 w-3.5 ${diagnoseStatus === 'running' ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            {diagnoseStatus === 'running' ? 'Testing…' : 'Test Sources'}
           </button>
           <ExportMenu creators={creators} />
           <div className="hidden sm:flex rounded-[var(--radius-sm)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
@@ -262,6 +311,11 @@ function DailyLeadsContent() {
           <ErrorIcon /> {refreshError}
           <button onClick={() => setRefreshStatus('idle')} className="ml-auto text-xs opacity-60 hover:opacity-100">Dismiss</button>
         </StatusBanner>
+      )}
+
+      {/* ── Diagnose panel ── */}
+      {diagnose && (
+        <DiagnosePanel report={diagnose} onDismiss={() => setDiagnose(null)} />
       )}
 
       {/* ── Filters ── */}
@@ -403,6 +457,80 @@ function RefreshProgressBanner({ progress }: { progress: ProgressState }) {
       </div>
       <div className="h-1 w-full" style={{ background: 'var(--border-subtle)' }}>
         <div className="h-full transition-all duration-500" style={{ width: `${pct}%`, background: 'var(--accent-gold)' }} />
+      </div>
+    </div>
+  );
+}
+
+function DiagnosePanel({ report, onDismiss }: { report: DiagnoseReport; onDismiss: () => void }) {
+  const entries = Object.entries(report.sources);
+  const envEntries = Object.entries(report.env ?? {});
+
+  return (
+    <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+      <div className="flex items-center justify-between border-b px-4 py-2.5" style={{ borderColor: 'var(--border-subtle)' }}>
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>Source Diagnosis</span>
+          <span className="text-[11px] font-mono" style={{ color: report.ok ? 'var(--success)' : 'var(--error)' }}>
+            {report.ok ? 'ALL OK' : 'SOME FAILING'}
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            · {new Date(report.ts).toLocaleTimeString()}
+          </span>
+        </div>
+        <button onClick={onDismiss} className="text-[11px] opacity-60 hover:opacity-100" style={{ color: 'var(--text-muted)' }}>Dismiss</button>
+      </div>
+
+      {/* Env vars present/missing */}
+      {envEntries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b px-4 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
+          <span className="text-[9px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Env</span>
+          {envEntries.map(([key, set]) => (
+            <span
+              key={key}
+              className="rounded px-1.5 py-[2px] text-[10px] font-mono"
+              style={{
+                background: set ? 'rgba(34,197,94,0.12)' : 'var(--error-bg)',
+                color: set ? '#22c55e' : 'var(--error)',
+                border: `1px solid ${set ? '#22c55e' : 'var(--error)'}`,
+              }}
+              title={set ? 'set' : 'NOT set'}
+            >
+              {set ? '✓' : '✗'} {key}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Per-source results */}
+      <div className="divide-y" style={{ borderColor: 'var(--border-subtle)' }}>
+        {entries.map(([key, info]) => {
+          const color =
+            info.status === 'ok' ? { bg: 'rgba(34,197,94,0.12)', fg: '#22c55e' } :
+            info.status === 'skipped' ? { bg: 'var(--bg-hover)', fg: 'var(--text-muted)' } :
+            { bg: 'var(--error-bg)', fg: 'var(--error)' };
+          return (
+            <div key={key} className="flex items-start gap-3 px-4 py-2.5">
+              <span
+                className="shrink-0 rounded px-2 py-[2px] text-[10px] font-bold uppercase tracking-wider"
+                style={{ background: color.bg, color: color.fg }}
+              >
+                {info.status}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[12px] font-semibold font-mono" style={{ color: 'var(--text-primary)' }}>{key}</span>
+                  {info.duration_ms > 0 && (
+                    <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{info.duration_ms}ms</span>
+                  )}
+                </div>
+                <div className="mt-0.5 text-[11px] break-all" style={{ color: info.status === 'error' ? 'var(--error)' : 'var(--text-secondary)' }}>
+                  {info.message}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
