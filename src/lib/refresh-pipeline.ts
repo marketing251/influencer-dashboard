@@ -25,7 +25,7 @@ import {
 } from './integrations/youtube';
 import { discoverXCreators } from './integrations/x';
 import { discoverViaWebSearch } from './integrations/web-search';
-import { fastEnrich } from './integrations/fast-enrich';
+import { fastEnrich, isPlaceholderEmail } from './integrations/fast-enrich';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
 import { verifyCandidate } from './verification';
@@ -175,7 +175,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   emit('init', 'Starting refresh');
   log.info('refresh-pipeline: starting', { timeBudgetMs, enrichConcurrency, maxEnrichCandidates });
 
-  // ─── Phase 0: prop-firm exclusion backfill (cheap, short) ─────────
+  // ─── Phase 0a: prop-firm exclusion backfill (cheap, short) ────────
   if (isSupabaseConfigured()) {
     emit('backfill_exclusion', 'Cleaning prop-firm exclusions');
     try {
@@ -183,6 +183,36 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       if (updated > 0) emit('backfill_exclusion', `Excluded ${updated} prop-firm rows from leads`);
     } catch (err) {
       log.warn('refresh-pipeline: exclusion backfill failed', { error: String(err) });
+    }
+  }
+
+  // ─── Phase 0b: null out placeholder/template emails that slipped in
+  // (e.g. "johnappleseed@gmail.com" from Apple's docs). We only scan the
+  // top 500 most-recently-seen rows to keep this cheap. Scores are NOT
+  // recomputed here — the next enrichment pass will handle that.
+  if (isSupabaseConfigured()) {
+    try {
+      const { data: suspect } = await supabaseAdmin
+        .from('creators')
+        .select('id, public_email')
+        .not('public_email', 'is', null)
+        .order('last_seen_at', { ascending: false })
+        .limit(500);
+
+      const toNull: string[] = [];
+      for (const row of suspect ?? []) {
+        if (row.public_email && isPlaceholderEmail(row.public_email)) toNull.push(row.id);
+      }
+      if (toNull.length > 0) {
+        await supabaseAdmin
+          .from('creators')
+          .update({ public_email: null, updated_at: new Date().toISOString() })
+          .in('id', toNull);
+        log.info('refresh-pipeline: nulled placeholder emails', { count: toNull.length });
+        emit('backfill_exclusion', `Removed ${toNull.length} placeholder/template emails`);
+      }
+    } catch (err) {
+      log.warn('refresh-pipeline: placeholder email cleanup failed', { error: String(err) });
     }
   }
 

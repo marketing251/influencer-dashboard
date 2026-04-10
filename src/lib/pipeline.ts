@@ -27,13 +27,22 @@ function analyzeText(texts: (string | null | undefined)[]) {
 }
 
 /**
- * A lead is outreach-ready if it has any contact path:
- *   email, phone, contact form, or a website we can crawl later.
+ * A lead is outreach-ready if it has any viable contact path:
+ *   email > phone > contact form > website we can crawl later > social profile DM
+ *
+ * The original rule required a website/email/phone/form and threw away
+ * every creator whose only reachable channel was their social profile.
+ * That lost dozens of valid leads per refresh (real YouTubers/IG users who
+ * just don't link a site in their bio). A social profile URL is a valid
+ * DM destination, so we accept it — leads with email still outrank
+ * profile-only leads via lead_score (email = +25 points).
+ *
  * Enforced at insert — updates are unrestricted because the lead already exists.
  */
 function hasContactPath(data: DiscoveredCreator): boolean {
   if (data.website) return true;
   if (data.contact?.email || data.contact?.phone || data.contact?.contact_form_url) return true;
+  if (data.account?.profile_url) return true;
   return false;
 }
 

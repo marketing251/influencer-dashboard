@@ -15,10 +15,24 @@ import { log } from '../logger';
 const EMAIL_RE = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 const PHONE_RE = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/g;
 const EMAIL_BL = [
-  'example.com', 'wixpress.com', 'sentry.io', 'google.com', 'gmail-smtp-in',
+  'example.com', 'example.org', 'example.net', 'example.io',
+  'wixpress.com', 'sentry.io', 'google.com', 'gmail-smtp-in',
   'facebook.com', 'twitter.com', 'cloudflare.com', 'wordpress.org',
   'schema.org', 'w3.org', 'jquery.com', 'gravatar.com', 'googletagmanager.com',
   'cdn-cgi', 'jsdelivr.net', 'unpkg.com',
+  // Doc/template placeholder addresses that keep getting scraped
+  'yourdomain.com', 'domain.com', 'yoursite.com', 'test.com', 'email.com',
+  'mysite.com', 'website.com', 'company.com', 'acme.com',
+];
+// Local-part blocklist — catches placeholder addresses regardless of domain
+const EMAIL_LOCAL_BL = [
+  'johnappleseed', 'jappleseed', 'appleseed',          // Apple's placeholder ID
+  'john.doe', 'jane.doe', 'johndoe', 'janedoe',         // Lorem ipsum people
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply',  // Automated senders
+  'test', 'test1', 'test2', 'demo', 'sample',           // Generic placeholders
+  'user', 'username', 'email', 'yourname', 'yourusername',
+  'firstname', 'lastname', 'firstnamelastname',
+  'youremail', 'your.email',
 ];
 const PHONE_BL = [/^0{4,}/, /^1234/, /^1111/];
 const CONTACT_PATH_RE = /\/(contact|contact-us|get-in-touch|say-hello|hire|work-with|business|partnerships|sponsor|inquir|collab|about|team|support)\b/i;
@@ -82,6 +96,17 @@ function htmlToText(html: string): string {
     .replace(/&[a-z]+;/gi, ' ');
 }
 
+export function isPlaceholderEmail(email: string): boolean {
+  const lower = email.toLowerCase();
+  const [local, domain] = lower.split('@');
+  if (!local || !domain) return true;
+  if (EMAIL_BL.some(b => domain.includes(b))) return true;
+  if (EMAIL_LOCAL_BL.includes(local)) return true;
+  // local-part contains a blocklisted placeholder token (e.g. "johnappleseed123")
+  if (EMAIL_LOCAL_BL.some(bl => local === bl || local.startsWith(bl + '.') || local.startsWith(bl + '_'))) return true;
+  return false;
+}
+
 function extractEmail(html: string, text: string): string | null {
   const mailtos = (html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi) ?? [])
     .map(m => m.replace(/^mailto:/i, ''));
@@ -89,11 +114,7 @@ function extractEmail(html: string, text: string): string | null {
   const textEmails = decoded.match(EMAIL_RE) ?? [];
   const all = [...mailtos, ...textEmails]
     .map(e => e.trim().replace(/\.$/, ''))
-    .filter(e => {
-      const domain = e.split('@')[1]?.toLowerCase();
-      if (!domain) return false;
-      return !EMAIL_BL.some(b => domain.includes(b));
-    });
+    .filter(e => !isPlaceholderEmail(e));
   // Prefer business-style aliases
   const prefer = ['hello', 'contact', 'team', 'business', 'info', 'support', 'press', 'partnerships'];
   const preferred = all.find(e => prefer.some(p => e.toLowerCase().startsWith(p + '@')));
