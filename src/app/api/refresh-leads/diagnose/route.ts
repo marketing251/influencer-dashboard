@@ -30,6 +30,7 @@ import { NextResponse } from 'next/server';
 import { googleSearch, isGoogleSearchConfigured } from '@/lib/integrations/google-search';
 import { knowledgeGraphLookup, isKnowledgeGraphConfigured } from '@/lib/integrations/google-knowledge-graph';
 import { classifyText, isNaturalLanguageConfigured } from '@/lib/integrations/google-natural-language';
+import { getRedditAccessToken, isRedditConfigured } from '@/lib/integrations/reddit-discovery';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -187,13 +188,19 @@ export async function GET() {
         };
   }
 
-  // ─── Reddit ───────────────────────────────────────────────────────
-  {
+  // ─── Reddit (OAuth script-app flow) ───────────────────────────────
+  if (!isRedditConfigured()) {
+    report.reddit = skipped('REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET not set');
+  } else {
     const { result, error, ms } = await timed(async () => {
-      const url = 'https://www.reddit.com/r/Forex/top.json?t=week&limit=5';
+      const token = await getRedditAccessToken();
+      if (!token) throw new Error('OAuth token fetch failed — check REDDIT_CLIENT_ID / SECRET and app type is "script"');
+
+      const url = 'https://oauth.reddit.com/r/Forex/top?t=week&limit=5&raw_json=1';
       const res = await fetch(url, {
         headers: {
-          'User-Agent': 'InfluencerDashboard/1.0 (+https://propaccount.com)',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'InfluencerDashboard/1.0 by /u/propaccount (+https://propaccount.com)',
           Accept: 'application/json',
         },
       });
@@ -224,6 +231,8 @@ export async function GET() {
       google_cse_cx: Boolean(process.env.GOOGLE_CSE_CX),
       google_kg_api_key: Boolean(process.env.GOOGLE_KG_API_KEY),
       google_nl_api_key: Boolean(process.env.GOOGLE_NL_API_KEY),
+      reddit_client_id: Boolean(process.env.REDDIT_CLIENT_ID),
+      reddit_client_secret: Boolean(process.env.REDDIT_CLIENT_SECRET),
       brave_search_api_key: Boolean(process.env.BRAVE_SEARCH_API_KEY),
     },
     sources: report,

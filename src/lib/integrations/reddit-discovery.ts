@@ -1,6 +1,6 @@
 /**
  * Reddit discovery — pulls trading influencer handles out of public subreddit
- * threads. Uses Reddit's free JSON API (no auth required for public listings).
+ * threads. Uses Reddit's OAuth API (script-app client_credentials flow).
  *
  * Two extraction strategies per subreddit:
  *   1. Post authors themselves — users posting high-engagement content in
@@ -9,14 +9,81 @@
  *      instagram.com / x.com / youtube.com / t.me / linktr.ee / etc. URLs,
  *      yielding handles on the platform those links point to.
  *
- * No API key needed. Reddit's public JSON endpoints are rate-limited to
- * 60 req/min for unauthenticated traffic, which is plenty for this use.
+ * Requires REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET env vars (create a
+ * "script" app at https://www.reddit.com/prefs/apps). OAuth gives us
+ * 100 requests/minute — plenty for 15 subreddits. Token is cached in
+ * module memory and auto-refreshed on expiration.
+ *
+ * Without credentials the module is a no-op (isRedditConfigured() === false)
+ * — Reddit's unauth JSON endpoints started getting 403 HTML login walls
+ * for server-side traffic in 2024, so unauth fallback is not possible.
  */
 
 import { log } from '../logger';
 import { extractCrossPlatformHandle, type CrossPlatformCandidate } from './google-search';
 
-const USER_AGENT = 'InfluencerDashboard/1.0 (+https://propaccount.com)';
+const USER_AGENT = 'InfluencerDashboard/1.0 by /u/propaccount (+https://propaccount.com)';
+
+// ─── OAuth (client_credentials) ─────────────────────────────────────
+
+interface RedditTokenCache {
+  token: string;
+  expiresAt: number;  // epoch ms
+}
+let tokenCache: RedditTokenCache | null = null;
+
+export function isRedditConfigured(): boolean {
+  return Boolean(process.env.REDDIT_CLIENT_ID && process.env.REDDIT_CLIENT_SECRET);
+}
+
+/**
+ * Fetch a Reddit OAuth bearer token via client_credentials. Caches the
+ * result in module memory and returns the cached token until 5 minutes
+ * before expiration. Returns null if credentials are missing or auth
+ * fails so callers can gracefully degrade.
+ */
+export async function getRedditAccessToken(): Promise<string | null> {
+  if (!isRedditConfigured()) return null;
+
+  const now = Date.now();
+  if (tokenCache && tokenCache.expiresAt > now + 5 * 60 * 1000) {
+    return tokenCache.token;
+  }
+
+  const clientId = process.env.REDDIT_CLIENT_ID as string;
+  const clientSecret = process.env.REDDIT_CLIENT_SECRET as string;
+  const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  try {
+    const res = await fetch('https://www.reddit.com/api/v1/access_token', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': USER_AGENT,
+      },
+      body: 'grant_type=client_credentials',
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      log.warn('reddit: auth failed', { status: res.status, body: body.slice(0, 200) });
+      return null;
+    }
+    const data = (await res.json()) as { access_token?: string; expires_in?: number; token_type?: string };
+    if (!data.access_token) {
+      log.warn('reddit: auth response missing token', { data });
+      return null;
+    }
+    // expires_in is seconds; subtract a small buffer and convert to absolute ms
+    const lifetimeMs = Math.max(60_000, (data.expires_in ?? 3600) * 1000);
+    tokenCache = { token: data.access_token, expiresAt: now + lifetimeMs };
+    log.info('reddit: got new access token', { expiresInSec: data.expires_in });
+    return data.access_token;
+  } catch (err) {
+    log.warn('reddit: auth fetch failed', { error: String(err) });
+    return null;
+  }
+}
 
 const TRADING_SUBREDDITS = [
   'Forex',
@@ -62,19 +129,29 @@ interface RedditListing {
   };
 }
 
-// ─── Fetch a subreddit's top posts ──────────────────────────────────
+// ─── Fetch a subreddit's top posts (authenticated) ──────────────────
 
 async function fetchTopPosts(subreddit: string, opts: { limit?: number; timeframe?: string; signal?: AbortSignal } = {}): Promise<RedditPostData[]> {
   const { limit = 50, timeframe = 'month', signal } = opts;
-  const url = `https://www.reddit.com/r/${subreddit}/top.json?t=${timeframe}&limit=${Math.min(limit, 100)}`;
+  const token = await getRedditAccessToken();
+  if (!token) return [];
+
+  // OAuth endpoints live on oauth.reddit.com and DON'T include .json
+  const url = `https://oauth.reddit.com/r/${subreddit}/top?t=${timeframe}&limit=${Math.min(limit, 100)}&raw_json=1`;
 
   try {
     const res = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+      },
       signal,
     });
     if (!res.ok) {
       log.debug('reddit: fetch non-ok', { subreddit, status: res.status });
+      // On 401 the token might have been revoked — clear cache so next call refetches
+      if (res.status === 401) tokenCache = null;
       return [];
     }
     const data = (await res.json()) as RedditListing;

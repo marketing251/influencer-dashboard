@@ -21,7 +21,7 @@
 import { supabaseAdmin, isSupabaseConfigured } from './db';
 import {
   discoverYouTubeCreators,
-  ALL_YOUTUBE_GROUPS,
+  type YouTubeKeywordGroup,
 } from './integrations/youtube';
 import { discoverXCreators } from './integrations/x';
 import { discoverViaWebSearch } from './integrations/web-search';
@@ -29,7 +29,7 @@ import { fastEnrich, isPlaceholderEmail } from './integrations/fast-enrich';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
 import { discoverAcrossPlatforms, isGoogleSearchConfigured, type CrossPlatformCandidate } from './integrations/google-search';
-import { discoverViaReddit } from './integrations/reddit-discovery';
+import { discoverViaReddit, isRedditConfigured } from './integrations/reddit-discovery';
 import { verifyCandidate } from './verification';
 import type { Platform } from './types';
 import {
@@ -242,11 +242,27 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   if (hasYouTube) {
     discoveryTasks.push((async () => {
       try {
+        // Highest-yield groups first — the 35-query cap picks from the top of this list.
+        // Lower-yield groups (beginner, podcast, live_stream, news_analysis, etc.) get
+        // skipped by default so the free-tier 10k/day YouTube quota is enough for
+        // multiple refreshes per day instead of just one.
+        const priorityGroups: YouTubeKeywordGroup[] = [
+          'forex',
+          'prop_firm',
+          'day_trading',
+          'mentor',
+          'options',
+          'crypto',
+          'smart_money',
+          'futures',
+          'stocks',
+        ];
         const results = await discoverYouTubeCreators({
-          groups: ALL_YOUTUBE_GROUPS,
+          groups: priorityGroups,
           maxPerQuery: 10,
-          minSubscribers: 100, // lowered from 500 — catch emerging creators too
-          secondPage: true,
+          minSubscribers: 100,      // lowered from 500 — catch emerging creators too
+          secondPage: false,        // quota-constrained; a second page doubles cost
+          maxQueries: 35,           // ~3 500 quota units per refresh
           concurrency: 6,
           signal: discoverySignal,
         });
@@ -374,27 +390,31 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   }
 
   // ── Reddit discovery — scans r/Forex, r/Daytrading, etc. for cross-platform mentions
-  discoveryTasks.push((async () => {
-    try {
-      const { crossPlatformHandles } = await discoverViaReddit({
-        postsPerSub: 40,
-        timeframe: 'month',
-        minUpvotes: 20,
-        concurrency: 4,
-        signal: discoverySignal,
-      });
-      const converted = crossPlatformHandles.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
-      sources.reddit = { discovered: converted.length, status: 'ok' };
-      counts.discovered += converted.length;
-      pendingCandidates.push(...converted);
-      emit('discovery', `Reddit returned ${converted.length} candidates`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      sources.reddit = { discovered: 0, status: 'error', note: msg };
-      counts.errors++;
-      log.warn('refresh-pipeline: reddit failed', { error: msg });
-    }
-  })());
+  if (isRedditConfigured()) {
+    discoveryTasks.push((async () => {
+      try {
+        const { crossPlatformHandles } = await discoverViaReddit({
+          postsPerSub: 40,
+          timeframe: 'month',
+          minUpvotes: 20,
+          concurrency: 4,
+          signal: discoverySignal,
+        });
+        const converted = crossPlatformHandles.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
+        sources.reddit = { discovered: converted.length, status: 'ok' };
+        counts.discovered += converted.length;
+        pendingCandidates.push(...converted);
+        emit('discovery', `Reddit returned ${converted.length} candidates`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sources.reddit = { discovered: 0, status: 'error', note: msg };
+        counts.errors++;
+        log.warn('refresh-pipeline: reddit failed', { error: msg });
+      }
+    })());
+  } else {
+    sources.reddit = { discovered: 0, status: 'skipped', note: 'REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET not set' };
+  }
 
   // Wait for all discovery sources (or discovery deadline)
   await Promise.race([

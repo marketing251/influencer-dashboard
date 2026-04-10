@@ -243,6 +243,12 @@ export interface DiscoverYouTubeOpts {
   signal?: AbortSignal;
   /** Parallel search fan-out (default 6). YouTube accepts bursty traffic fine. */
   concurrency?: number;
+  /**
+   * Hard cap on the number of search queries. Each search costs 100 quota
+   * units; free tier is 10 000/day. Default 35 keeps the whole call under
+   * 3 600 units so we can afford multiple refreshes per day.
+   */
+  maxQueries?: number;
 }
 
 export async function discoverYouTubeCreators(opts?: DiscoverYouTubeOpts): Promise<YouTubeDiscoveryResult[]> {
@@ -254,9 +260,11 @@ export async function discoverYouTubeCreators(opts?: DiscoverYouTubeOpts): Promi
     secondPage = false,
     signal,
     concurrency = 6,
+    maxQueries = 35,
   } = opts ?? {};
 
-  const queryList = queries ?? buildQueries(groups);
+  const fullQueryList = queries ?? buildQueries(groups);
+  const queryList = fullQueryList.slice(0, Math.max(1, maxQueries));
   const seen = new Set<string>();
   let quota = false;
 
@@ -273,14 +281,17 @@ export async function discoverYouTubeCreators(opts?: DiscoverYouTubeOpts): Promi
 
   for (const r of firstPage) for (const id of r.ids) seen.add(id);
 
-  // Phase 2: optional second page (for denser coverage on the top queries)
+  // Phase 2: optional second page using the next-tokens we already have from
+  // phase 1 (fixes a bug where this previously re-fetched page 1 every time).
   if (!quota && secondPage && seen.size < 500) {
-    await pLimitAll(queryList.slice(0, Math.min(20, queryList.length)), concurrency, async q => {
-      if (quota || signal?.aborted) return;
+    const phase2Work = queryList
+      .map((q, i) => ({ q, next: firstPage[i]?.next ?? null }))
+      .filter(x => x.next !== null)
+      .slice(0, Math.min(20, queryList.length));
+    await pLimitAll(phase2Work, concurrency, async ({ q, next }) => {
+      if (quota || signal?.aborted || !next) return;
       try {
-        const p1 = await search(q, maxPerQuery, undefined, signal);
-        if (!p1.next) return;
-        const p2 = await search(q, maxPerQuery, p1.next, signal);
+        const p2 = await search(q, maxPerQuery, next, signal);
         for (const id of p2.ids) seen.add(id);
       } catch (e) {
         if (String(e).includes('QUOTA')) quota = true;
