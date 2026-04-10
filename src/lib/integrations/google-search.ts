@@ -139,6 +139,7 @@ export async function googleSearchMany(
  */
 export const TRADING_QUERIES = {
   instagram: [
+    // original tier (broad)
     'forex trader mentor',
     'day trading coach',
     'crypto trader educator',
@@ -147,15 +148,263 @@ export const TRADING_QUERIES = {
     'options trading mentor',
     'futures trader course',
     'trading academy community',
+    // long-tail expansion
+    'forex scalper strategy',
+    'swing trader community',
+    'copy trader signals',
+    'trading discord community',
+    'trading live stream',
+    'trading bot algo',
+    'funded trader journey',
+    'crypto leverage trader',
+    'price action trader',
+    'trading psychology coach',
+    'beginner forex trader',
+    'day trader lifestyle',
   ],
   linkedin: [
+    // original tier
     'forex trader educator',
     'trading mentor coach',
-    'prop trading firm funded trader',
+    'prop trading firm founder',
     'day trader founder',
     'options trading coach',
     'trading academy founder',
     'quantitative trader educator',
     'crypto trading mentor',
+    // long-tail expansion
+    'algorithmic trader founder',
+    'trading firm CEO',
+    'trading signals provider',
+    'trading community founder',
+    'trader coach entrepreneur',
+    'trading fund manager',
+    'forex broker executive',
+    'crypto fund manager',
+    'trading book author',
+    'financial educator trader',
   ],
 } as const;
+
+/**
+ * Cross-platform queries used by `discoverAcrossPlatforms`.
+ * These don't site-restrict on the query side — the CSE engine already
+ * covers instagram/linkedin/twitter/youtube/reddit/medium/etc., and we
+ * classify each result by its hostname.
+ */
+export const CROSS_PLATFORM_QUERIES = [
+  'forex trader mentor',
+  'day trading coach',
+  'prop firm funded trader',
+  'trading mentor course',
+  'crypto trader signals',
+  'options trading educator',
+  'futures trader strategy',
+  'swing trader community',
+  'trading academy',
+  'trading discord server',
+  'algo trader backtesting',
+  'smart money ICT mentor',
+  'scalping strategy trader',
+  'trading bot automation',
+  'copy trading signals',
+  'trading psychology coach',
+];
+
+// ─── Multi-platform discovery ───────────────────────────────────────
+
+export interface CrossPlatformCandidate {
+  platform: 'instagram' | 'linkedin' | 'x' | 'youtube' | 'reddit' | 'stocktwits' | 'telegram' | 'discord';
+  handle: string;
+  profileUrl: string;
+  name: string;
+  sourceUrl: string;
+  sourceTitle: string;
+}
+
+/**
+ * Pull handles for multiple platforms out of a single CSE result URL.
+ * Returns null for URLs we can't classify or for non-profile pages
+ * (post URLs, tag pages, etc.).
+ */
+export function extractCrossPlatformHandle(url: string, title = ''): CrossPlatformCandidate | null {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return null; }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const path = parsed.pathname;
+
+  // ── Instagram: /{handle}/ or /{handle}
+  if (host.endsWith('instagram.com')) {
+    const m = path.match(/^\/([a-zA-Z0-9_.]{2,30})\/?$/);
+    if (!m) return null;
+    const bl = ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct', 'about', 'developer', 'legal', 'tv', 'tags'];
+    if (bl.includes(m[1])) return null;
+    return {
+      platform: 'instagram',
+      handle: m[1],
+      profileUrl: `https://instagram.com/${m[1]}`,
+      name: cleanResultTitle(title) || prettifyHandle(m[1]),
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  // ── LinkedIn: /in/{slug} or /company/{slug}
+  if (host.endsWith('linkedin.com')) {
+    const m = path.match(/^\/(in|company)\/([a-zA-Z0-9\-]{2,60})\/?/);
+    if (!m) return null;
+    return {
+      platform: 'linkedin',
+      handle: m[2],
+      profileUrl: `https://linkedin.com/${m[1]}/${m[2]}`,
+      name: cleanResultTitle(title) || prettifyHandle(m[2]),
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  // ── X / Twitter: /{handle}
+  if (host === 'x.com' || host.endsWith('twitter.com')) {
+    const m = path.match(/^\/([a-zA-Z0-9_]{1,15})\/?$/);
+    if (!m) return null;
+    const bl = ['intent', 'share', 'i', 'search', 'explore', 'home', 'settings', 'login', 'signup', 'about', 'jobs', 'tos', 'privacy'];
+    if (bl.includes(m[1])) return null;
+    return {
+      platform: 'x',
+      handle: m[1],
+      profileUrl: `https://x.com/${m[1]}`,
+      name: cleanResultTitle(title) || prettifyHandle(m[1]),
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  // ── YouTube: /@{handle}, /channel/{id}, /c/{slug}, /user/{slug}
+  if (host.endsWith('youtube.com')) {
+    const at = path.match(/^\/@([a-zA-Z0-9_\-.]{2,50})\/?$/);
+    if (at) {
+      return {
+        platform: 'youtube',
+        handle: at[1],
+        profileUrl: `https://youtube.com/@${at[1]}`,
+        name: cleanResultTitle(title) || prettifyHandle(at[1]),
+        sourceUrl: url,
+        sourceTitle: title,
+      };
+    }
+    const channel = path.match(/^\/(?:c|channel|user)\/([a-zA-Z0-9_\-]{2,50})\/?/);
+    if (channel) {
+      return {
+        platform: 'youtube',
+        handle: channel[1],
+        profileUrl: `https://youtube.com/c/${channel[1]}`,
+        name: cleanResultTitle(title) || prettifyHandle(channel[1]),
+        sourceUrl: url,
+        sourceTitle: title,
+      };
+    }
+    return null;
+  }
+
+  // ── StockTwits: /{handle}
+  if (host.endsWith('stocktwits.com')) {
+    const m = path.match(/^\/([a-zA-Z0-9_]{2,30})\/?$/);
+    if (!m) return null;
+    const bl = ['about', 'help', 'news', 'rankings', 'symbol', 'search'];
+    if (bl.includes(m[1])) return null;
+    return {
+      platform: 'stocktwits',
+      handle: m[1],
+      profileUrl: `https://stocktwits.com/${m[1]}`,
+      name: cleanResultTitle(title) || prettifyHandle(m[1]),
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  // ── Telegram: t.me/{channel}
+  if (host === 't.me' || host.endsWith('.t.me')) {
+    const m = path.match(/^\/([a-zA-Z0-9_]{4,40})\/?$/);
+    if (!m) return null;
+    return {
+      platform: 'telegram',
+      handle: m[1],
+      profileUrl: `https://t.me/${m[1]}`,
+      name: cleanResultTitle(title) || prettifyHandle(m[1]),
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  // ── Discord invites: discord.com/invite/{code} or discord.gg/{code}
+  if (host.endsWith('discord.com') || host === 'discord.gg') {
+    const m = path.match(/^\/(?:invite\/)?([a-zA-Z0-9\-]{4,30})\/?$/);
+    if (!m) return null;
+    return {
+      platform: 'discord',
+      handle: m[1],
+      profileUrl: `https://discord.gg/${m[1]}`,
+      name: cleanResultTitle(title) || `Discord: ${m[1]}`,
+      sourceUrl: url,
+      sourceTitle: title,
+    };
+  }
+
+  return null;
+}
+
+function prettifyHandle(handle: string): string {
+  return handle.replace(/[_.\-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+}
+
+function cleanResultTitle(title: string): string {
+  if (!title) return '';
+  return title
+    .replace(/\s*\(@[^)]+\).*$/, '')                    // "(@handle) · ..."
+    .replace(/\s*\|\s*LinkedIn.*$/i, '')                 // "Name | LinkedIn"
+    .replace(/\s*-\s*YouTube.*$/i, '')                   // "Name - YouTube"
+    .replace(/\s*on\s+(?:Instagram|LinkedIn|Twitter|X).*$/i, '') // "Name on Instagram"
+    .replace(/\s*[\|\-–·•]\s*.*$/, '')                   // general separator suffix
+    .trim();
+}
+
+/**
+ * Run CSE across all trading queries and return handles for every platform
+ * we can classify. The same result URL is only returned once.
+ *
+ * This is the heavy lifter for cross-platform discovery — a single call
+ * surfaces IG, LinkedIn, X, YouTube, StockTwits, Telegram, and Discord
+ * candidates in one shot, reusing the existing CSE engine configuration.
+ */
+export async function discoverAcrossPlatforms(
+  opts: GoogleSearchOpts & { concurrency?: number; queries?: readonly string[] } = {},
+): Promise<CrossPlatformCandidate[]> {
+  if (!isGoogleSearchConfigured()) return [];
+  const queries = opts.queries ?? CROSS_PLATFORM_QUERIES;
+  const results = await googleSearchMany([...queries], opts);
+
+  const seen = new Set<string>(); // `${platform}::${handle.toLowerCase()}`
+  const out: CrossPlatformCandidate[] = [];
+  for (const r of results) {
+    const cand = extractCrossPlatformHandle(r.url, r.title);
+    if (!cand) continue;
+    const key = `${cand.platform}::${cand.handle.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cand);
+  }
+
+  log.info('google-search: cross-platform done', {
+    queries: queries.length,
+    rawResults: results.length,
+    candidates: out.length,
+    byPlatform: countByPlatform(out),
+  });
+  return out;
+}
+
+function countByPlatform(list: CrossPlatformCandidate[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const c of list) counts[c.platform] = (counts[c.platform] ?? 0) + 1;
+  return counts;
+}
