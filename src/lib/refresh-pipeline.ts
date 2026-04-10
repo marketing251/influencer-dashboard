@@ -26,6 +26,8 @@ import {
 import { discoverXCreators } from './integrations/x';
 import { discoverViaWebSearch } from './integrations/web-search';
 import { fastEnrich } from './integrations/fast-enrich';
+import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
+import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
 import { verifyCandidate } from './verification';
 import {
   upsertCreator,
@@ -384,21 +386,43 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   // Reserve ~40s at the end for the follow-up phase
   const enrichmentDeadline = Math.max(Date.now() + 10_000, deadline - 40_000);
 
+  const useKnowledgeGraph = isKnowledgeGraphConfigured();
+
   await pLimit(enrichTarget, enrichConcurrency, async (packet) => {
     if (Date.now() > enrichmentDeadline || aborted()) return;
 
+    // Knowledge Graph fallback: if the candidate has no website and looks like
+    // a real person's name, try to recover a canonical URL + bio.
+    let mutableCreator = packet.creator;
+    if (useKnowledgeGraph && !mutableCreator.website && looksLikeProperName(mutableCreator.name)) {
+      try {
+        const kg = await knowledgeGraphBest(mutableCreator.name, { timeoutMs: 4_000 });
+        if (kg) {
+          const recoveredWebsite = kg.url && !/wikipedia\.org|facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com/i.test(kg.url)
+            ? kg.url
+            : null;
+          const recoveredBio = kg.detailedDescription || kg.description;
+          mutableCreator = {
+            ...mutableCreator,
+            website: mutableCreator.website || recoveredWebsite,
+            bio: mutableCreator.bio || recoveredBio || null,
+          };
+        }
+      } catch { /* continue without KG data */ }
+    }
+
     // Fast-enrich if we have a website
     const contact: { email?: string | null; phone?: string | null; contact_form_url?: string | null } = {};
-    if (packet.creator.website) {
+    if (mutableCreator.website) {
       try {
-        const enr = await fastEnrich(packet.creator.website, { maxTotalMs: 5_500, perRequestMs: 3_000 });
+        const enr = await fastEnrich(mutableCreator.website, { maxTotalMs: 5_500, perRequestMs: 3_000 });
         contact.email = enr.email;
         contact.phone = enr.phone;
         contact.contact_form_url = enr.contact_form_url;
       } catch { /* continue without enrichment */ }
     }
 
-    const creator: DiscoveredCreator = { ...packet.creator, contact };
+    const creator: DiscoveredCreator = { ...mutableCreator, contact };
 
     try {
       const result = await upsertCreator(creator, packet.posts);
@@ -497,6 +521,56 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     }
   }
 
+  // ─── Phase 5: niche classification via Natural Language API (cheap, bounded) ─
+  // Quota-conscious: only classify leads that are missing a niche AND have
+  // enough bio text to actually produce a result. Capped at 20 per refresh so
+  // we stay comfortably inside the 5,000-unit free monthly quota.
+  if (isSupabaseConfigured() && isNaturalLanguageConfigured() && remaining() > 8_000) {
+    emit('followup_enrichment', 'Classifying niches from bios');
+    try {
+      const { data: unclassified } = await supabaseAdmin
+        .from('creators')
+        .select('id, name')
+        .is('niche', null)
+        .neq('excluded_from_leads', true)
+        .order('lead_score', { ascending: false })
+        .limit(20);
+
+      // Bios live on creator_accounts, not creators — batch-fetch them
+      if (unclassified && unclassified.length > 0) {
+        const ids = unclassified.map(u => u.id);
+        const { data: accountBios } = await supabaseAdmin
+          .from('creator_accounts')
+          .select('creator_id, bio')
+          .in('creator_id', ids);
+
+        const bioByCreator = new Map<string, string>();
+        for (const row of accountBios ?? []) {
+          if (row.bio && !bioByCreator.has(row.creator_id)) bioByCreator.set(row.creator_id, row.bio);
+        }
+
+        let classified = 0;
+        await pLimit(unclassified, 4, async (row) => {
+          if (remaining() < 4_000 || aborted()) return;
+          const bio = bioByCreator.get(row.id);
+          if (!bio || bio.length < 120) return; // skip short bios (<20 words ~ 120 chars)
+          try {
+            const niche = await classifyNicheWithNL(bio, { timeoutMs: 4_000 });
+            if (niche) {
+              await supabaseAdmin.from('creators').update({ niche, updated_at: new Date().toISOString() }).eq('id', row.id);
+              classified++;
+            }
+          } catch (err) {
+            log.debug('refresh-pipeline: NL classify failed', { id: row.id, error: String(err) });
+          }
+        }, () => remaining() < 4_000 || aborted());
+        if (classified > 0) emit('followup_enrichment', `Classified ${classified} niches via NL API`);
+      }
+    } catch (err) {
+      log.warn('refresh-pipeline: niche classification failed', { error: String(err) });
+    }
+  }
+
   return finalize(aborted() ? 'aborted' : timeIsUp() ? 'time_budget' : 'completed');
 
   // ─── finalize helper ──────────────────────────────────────────────
@@ -534,6 +608,20 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/**
+ * Heuristic: does `name` look like a real person's name worth looking up
+ * in Google Knowledge Graph? We only call KG for 2-4 capitalized-word names
+ * to avoid burning quota on handles like "forextrader123" or brand names.
+ */
+function looksLikeProperName(name: string): boolean {
+  if (!name) return false;
+  const clean = name.trim();
+  if (clean.length < 4 || clean.length > 60) return false;
+  const words = clean.split(/\s+/);
+  if (words.length < 2 || words.length > 4) return false;
+  return words.every(w => /^[A-Z][a-zA-Z'.-]{1,}$/.test(w));
 }
 
 /** Build an AbortSignal that fires when the deadline passes OR the parent aborts. */

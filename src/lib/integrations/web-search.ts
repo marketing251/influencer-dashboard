@@ -12,6 +12,7 @@
 
 import { log } from '../logger';
 import type { Platform } from '../types';
+import { googleSearchMany, isGoogleSearchConfigured, TRADING_QUERIES } from './google-search';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -381,6 +382,50 @@ export async function discoverViaWebSearch(opts: {
     }
   }
 
+  // Strategy 4: Google Custom Search (if configured)
+  // This is the primary dynamic discovery path when GOOGLE_CLOUD_API_KEY + GOOGLE_CSE_CX are set.
+  // The Programmable Search Engine is already scoped to instagram.com / linkedin.com / etc.,
+  // so the queries themselves don't need site: operators.
+  const hasGoogleSearch = isGoogleSearchConfigured();
+  let googleFound = 0;
+  if (hasGoogleSearch) {
+    try {
+      const queries = [...TRADING_QUERIES[platform]];
+      const results = await googleSearchMany(queries, { num: 10, concurrency: 4, timeoutMs: 8_000 });
+      for (const r of results) {
+        // Only keep results from the target platform
+        const hostLower = (() => { try { return new URL(r.url).hostname.toLowerCase(); } catch { return ''; } })();
+        const isTarget = platform === 'instagram'
+          ? hostLower.includes('instagram.com')
+          : hostLower.includes('linkedin.com');
+        if (!isTarget) continue;
+
+        const handles = extractHandles(`${r.url} ${r.title} ${r.snippet}`, platform);
+        for (const h of handles) {
+          if (!allHandles.has(h)) {
+            allHandles.set(h, {
+              // Prefer the search result title if it looks like a real name
+              name: looksLikeName(r.title) ? cleanTitle(r.title) : prettify(h),
+              handle: h,
+              platformHint: platform,
+              profileUrl: platform === 'instagram'
+                ? `https://instagram.com/${h}`
+                : `https://linkedin.com/in/${h}`,
+              websiteUrl: null,
+              linkInBioUrl: null,
+              sourceUrl: r.url,
+              sourceTitle: r.title || `Google: ${queries[0]}`,
+            });
+            googleFound++;
+          }
+        }
+      }
+      log.info('web-search: Google CSE done', { platform, results: results.length, newHandles: googleFound });
+    } catch (err) {
+      log.warn('web-search: Google CSE failed', { platform, error: String(err) });
+    }
+  }
+
   const candidates = [...allHandles.values()];
   log.info('web-search: complete', {
     platform,
@@ -389,7 +434,29 @@ export async function discoverViaWebSearch(opts: {
     fromSearch: candidates.length - seeds.length,
     ddgWorked,
     braveUsed: hasBrave,
+    googleUsed: hasGoogleSearch,
+    googleFound,
   });
 
   return candidates;
+}
+
+/** Heuristic: does a search result title look like a person's name? */
+function looksLikeName(title: string): boolean {
+  if (!title) return false;
+  // Strip common social suffixes
+  const clean = title.replace(/\s*[\|\-–·•].*$/, '').trim();
+  // "Jane Doe" or "Jane Doe (@janedoe)" — 2-4 capitalized words
+  const words = clean.split(/\s+/).slice(0, 4);
+  if (words.length < 2) return false;
+  return words.every(w => /^[A-Z][a-zA-Z'.-]{1,}$/.test(w));
+}
+
+/** Strip "(@handle) · Instagram photos and videos" style suffixes. */
+function cleanTitle(title: string): string {
+  return title
+    .replace(/\s*\(@[^)]+\).*$/, '')
+    .replace(/\s*[\|\-–·•].*$/, '')
+    .replace(/\s*on\s+(?:Instagram|LinkedIn).*$/i, '')
+    .trim();
 }
