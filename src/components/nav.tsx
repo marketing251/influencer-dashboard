@@ -10,7 +10,7 @@ const links = [
   { href: '/', label: 'Overview' },
   { href: '/daily-leads', label: 'Daily Leads' },
   { href: '/outreach', label: 'Outreach' },
-  { href: '/youtube-test', label: 'YouTube' },
+  { href: '/youtube-test', label: 'Custom Search' },
 ];
 
 export function Nav() {
