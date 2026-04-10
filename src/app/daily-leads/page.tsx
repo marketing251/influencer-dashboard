@@ -11,6 +11,11 @@ import type { Creator, CreatorAccount } from '@/lib/types';
 type CreatorWithAccounts = Creator & { accounts: CreatorAccount[] };
 type RefreshStatus = 'idle' | 'running' | 'success' | 'error';
 
+type SourceKey = 'youtube' | 'x' | 'instagram_web' | 'linkedin_web' | 'google_cse' | 'reddit';
+type SourceStatus = 'ok' | 'skipped' | 'error';
+interface SourceInfo { discovered: number; status: SourceStatus; note?: string }
+type SourceMap = Partial<Record<SourceKey, SourceInfo>>;
+
 interface RefreshStats {
   attempted: number;
   inserted: number;
@@ -23,6 +28,7 @@ interface RefreshStats {
   errors: number;
   elapsedSec: number;
   timestamp: string;
+  sources: SourceMap;
 }
 
 interface RefreshProgressEvent {
@@ -45,6 +51,7 @@ interface RefreshProgressEvent {
   stopped_reason?: string;
   email_rate?: number;
   error?: string;
+  sources?: SourceMap;
 }
 
 interface ProgressState {
@@ -57,6 +64,7 @@ interface ProgressState {
   elapsedMs: number;
   remainingMs: number;
   timeBudgetMs: number;
+  sources: SourceMap;
 }
 
 const INITIAL_PROGRESS: ProgressState = {
@@ -69,6 +77,7 @@ const INITIAL_PROGRESS: ProgressState = {
   elapsedMs: 0,
   remainingMs: 270_000,
   timeBudgetMs: 270_000,
+  sources: {},
 };
 
 function DailyLeadsContent() {
@@ -135,6 +144,7 @@ function DailyLeadsContent() {
               elapsedMs: event.elapsed_ms ?? 0,
               remainingMs: event.remaining_ms ?? 0,
               timeBudgetMs: event.time_budget_ms ?? 270_000,
+              sources: event.sources ?? {},
             });
           } catch {
             // Ignore malformed lines — stream keeps going
@@ -174,6 +184,7 @@ function DailyLeadsContent() {
       errors: lastEvent.errors ?? 0,
       elapsedSec: Math.round((lastEvent.elapsed_ms ?? 0) / 1000),
       timestamp: new Date().toLocaleTimeString(),
+      sources: lastEvent.sources ?? {},
     };
     setRefreshStats(stats);
 
@@ -243,6 +254,7 @@ function DailyLeadsContent() {
               <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
             </div>
           </div>
+          <SourcesStrip sources={refreshStats.sources} />
         </div>
       )}
       {refreshStatus === 'error' && refreshError && (
@@ -298,6 +310,52 @@ function MetricCell({ value, label, accent }: { value: number; label: string; ac
     <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
       <div className="text-[16px] font-semibold tabular-nums" style={{ color: accent ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{value}</div>
       <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
+    </div>
+  );
+}
+
+const SOURCE_LABELS: Record<SourceKey, string> = {
+  youtube: 'YouTube',
+  x: 'X',
+  instagram_web: 'Instagram',
+  linkedin_web: 'LinkedIn',
+  google_cse: 'Google CSE',
+  reddit: 'Reddit',
+};
+const SOURCE_ORDER: SourceKey[] = ['youtube', 'x', 'instagram_web', 'linkedin_web', 'google_cse', 'reddit'];
+
+function SourcesStrip({ sources }: { sources: SourceMap }) {
+  const entries = SOURCE_ORDER
+    .map(key => ({ key, info: sources[key] }))
+    .filter((e): e is { key: SourceKey; info: SourceInfo } => Boolean(e.info));
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}>
+      <span className="text-[9px] uppercase tracking-widest" style={{ color: 'var(--text-muted)' }}>Sources</span>
+      {entries.map(({ key, info }) => {
+        const color =
+          info.status === 'error' ? { bg: 'var(--error-bg)', fg: 'var(--error)', border: 'var(--error)' } :
+          info.status === 'skipped' ? { bg: 'var(--bg-hover)', fg: 'var(--text-muted)', border: 'var(--border)' } :
+          info.discovered > 0 ? { bg: 'rgba(34,197,94,0.12)', fg: '#22c55e', border: '#22c55e' } :
+          { bg: 'var(--bg-hover)', fg: 'var(--text-muted)', border: 'var(--border)' };
+        const label = SOURCE_LABELS[key];
+        const title = info.note ?? `${label}: ${info.status} (${info.discovered} discovered)`;
+        return (
+          <span
+            key={key}
+            title={title}
+            className="inline-flex items-center gap-1.5 rounded px-2 py-[3px] text-[11px] font-medium"
+            style={{ background: color.bg, color: color.fg, border: `1px solid ${color.border}` }}
+          >
+            <span>{label}</span>
+            <span className="font-mono tabular-nums">{info.discovered}</span>
+            {info.status === 'error' && <span className="text-[9px] uppercase">ERR</span>}
+            {info.status === 'skipped' && <span className="text-[9px] uppercase opacity-70">SKIP</span>}
+          </span>
+        );
+      })}
     </div>
   );
 }
