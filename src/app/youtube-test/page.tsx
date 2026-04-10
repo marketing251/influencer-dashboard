@@ -122,9 +122,18 @@ async function searchYouTube({ keyword, pagesPerKw, minAudience, log }: AdapterA
       const params = new URLSearchParams({ q: keyword, maxResults: '10' });
       if (pageToken) params.set('pageToken', pageToken);
       const res = await fetch(`/api/youtube/search?${params}`);
-      if (!res.ok) { log(`  ✗ YouTube HTTP ${res.status}`); break; }
 
-      const data = (await res.json()) as YouTubeSearchResponse;
+      // Parse the body whether the request succeeded or not — the API route
+      // returns a JSON { error } payload on failures (including quota
+      // exceeded, which it re-maps to HTTP 429) and we want to surface that
+      // message in the scan log instead of just "HTTP 429".
+      const data = (await res.json().catch(() => null)) as (YouTubeSearchResponse & { error?: string }) | null;
+
+      if (!res.ok || !data) {
+        const msg = data?.error ?? `HTTP ${res.status}`;
+        log(`  ✗ YouTube: ${msg}`);
+        break;
+      }
       if (data.error) { log(`  ✗ YouTube: ${data.error}`); break; }
 
       for (const c of data.creators ?? []) {
