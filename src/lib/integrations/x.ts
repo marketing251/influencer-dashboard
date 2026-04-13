@@ -16,6 +16,7 @@
 
 import { log } from '../logger';
 import type { DiscoveredCreator, DiscoveredPost } from '../pipeline';
+import { isHandleKnown, type ExistingIndex } from '../pipeline';
 
 const BASE_URL = 'https://api.twitter.com/2';
 
@@ -358,6 +359,8 @@ export interface XDiscoverOpts {
   queries?: string[];
   /** Abort signal for time-budget enforcement. */
   signal?: AbortSignal;
+  /** Pre-loaded exclusion index — skip users already in DB during discovery. */
+  existingIndex?: ExistingIndex;
 }
 
 /**
@@ -372,6 +375,7 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
     maxPages = 1,
     queries,
     signal,
+    existingIndex,
   } = opts ?? {};
 
   // Reset the module-level rate counter at the start of each sweep
@@ -420,11 +424,19 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
     rateRemaining: rateLimitRemaining,
   });
 
-  // Phase 2: Filter and normalize
+  // Phase 2: Filter, exclude known, and normalize
   const results: XDiscoveryResult[] = [];
+  let skippedKnown = 0;
+
   for (const [userId, user] of userMap) {
     const followers = user.public_metrics?.followers_count ?? 0;
     if (followers < minFollowers) continue;
+
+    // Pre-discovery exclusion: skip accounts already in the DB
+    if (existingIndex && isHandleKnown('x', user.id, user.username, existingIndex)) {
+      skippedKnown++;
+      continue;
+    }
 
     const creator = toDiscoveredCreator(user);
     const tweets = tweetsByAuthor.get(userId) ?? [];
@@ -437,7 +449,7 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
   }
 
   results.sort((a, b) => b.creator.account.followers - a.creator.account.followers);
-  log.info('x.discover: complete', { creators: results.length });
+  log.info('x.discover: complete', { creators: results.length, skippedKnown });
   return results;
 }
 
@@ -466,6 +478,8 @@ export interface XExpansionOpts {
   minSeedFollowers?: number;
   delayMs?: number;
   signal?: AbortSignal;
+  /** Pre-loaded exclusion index — skip users already in DB. */
+  existingIndex?: ExistingIndex;
 }
 
 /**
@@ -537,11 +551,13 @@ export async function discoverXExpansion(opts: XExpansionOpts): Promise<XDiscove
     }
   }
 
-  // Convert to XDiscoveryResult with minFollowers: 500 (lower than search, since these are vetted by proximity)
+  // Convert to XDiscoveryResult — filter by followers AND exclusion index
+  const { existingIndex } = opts;
   const results: XDiscoveryResult[] = [];
   for (const user of discoveredUsers.values()) {
     const followers = user.public_metrics?.followers_count ?? 0;
     if (followers < 500) continue;
+    if (existingIndex && isHandleKnown('x', user.id, user.username, existingIndex)) continue;
     results.push({ creator: toDiscoveredCreator(user), posts: [] });
   }
 

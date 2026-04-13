@@ -36,9 +36,12 @@ import type { Platform } from './types';
 import {
   upsertCreator,
   buildExistingIndex,
+  buildFullExclusionIndex,
   isAlreadyKnown,
+  addToIndex,
   type DiscoveredCreator,
   type DiscoveredPost,
+  type ExistingIndex,
 } from './pipeline';
 import { classifyPropFirm, backfillPropFirmExclusion } from './prop-firm-classifier';
 import { computeLeadScore, computeConfidenceScore } from './scoring';
@@ -78,6 +81,10 @@ export interface RefreshCounts {
   enrichment_attempts: number;
   enrichment_success: number;
   hard_filtered: number;
+  // Pre-discovery exclusion metrics
+  skipped_known_before_enrichment: number;
+  skipped_seen_this_run: number;
+  enrichment_skipped_known: number;
 }
 
 export interface RefreshSources {
@@ -129,6 +136,7 @@ function emptyCounts(): RefreshCounts {
     with_email: 0, with_phone: 0, with_form: 0, errors: 0,
     x_discovered: 0, x_expanded: 0, x_enriched: 0, x_with_email: 0, x_with_website: 0,
     enrichment_attempts: 0, enrichment_success: 0, hard_filtered: 0,
+    skipped_known_before_enrichment: 0, skipped_seen_this_run: 0, enrichment_skipped_known: 0,
   };
 }
 
@@ -226,6 +234,30 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   if (timeIsUp()) return finalize('time_budget');
 
   // ═══════════════════════════════════════════════════════════════════
+  // PHASE 0.5: PRE-LOAD FULL EXCLUSION INDEX
+  // Load ALL existing creator identities BEFORE any discovery API calls.
+  // This lets discovery functions skip known accounts during their search
+  // loops, saving API calls and enrichment time.
+  // ═══════════════════════════════════════════════════════════════════
+
+  let exclusionIndex: ExistingIndex | undefined;
+  const runSeenIndex: ExistingIndex = {
+    platformIds: new Set(), handles: new Set(), domains: new Set(), emails: new Set(),
+  };
+
+  if (isSupabaseConfigured()) {
+    emit('backfill_exclusion', 'Pre-loading exclusion index');
+    try {
+      exclusionIndex = await buildFullExclusionIndex();
+      emit('backfill_exclusion', `Exclusion index: ${exclusionIndex.platformIds.size} IDs, ${exclusionIndex.handles.size} handles, ${exclusionIndex.domains.size} domains, ${exclusionIndex.emails.size} emails`);
+    } catch (err) {
+      log.warn('refresh-pipeline: exclusion index failed, proceeding without', { error: String(err) });
+    }
+  }
+
+  if (timeIsUp()) return finalize('time_budget');
+
+  // ═══════════════════════════════════════════════════════════════════
   // PHASE 1a: X PRIMARY DISCOVERY (budget: ~60s)
   // X runs FIRST, solo, with the most time. This is the main discovery
   // source — everything else is supplementary.
@@ -239,11 +271,12 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     let xResults: XDiscoveryResult[] = [];
     try {
       xResults = await discoverXCreators({
-        maxPerQuery: 100,     // full page size (was 20)
-        minFollowers: 500,    // lower threshold to catch emerging creators
+        maxPerQuery: 100,
+        minFollowers: 500,
         delayMs: 1_500,
-        maxPages: 2,          // paginate if tier allows
+        maxPages: 2,
         signal: xSignal,
+        existingIndex: exclusionIndex,
       });
       sources.x = { discovered: xResults.length, status: 'ok' };
       counts.x_discovered = xResults.length;
@@ -266,6 +299,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
           minSeedFollowers: 5_000,
           delayMs: 1_500,
           signal: xSignal,
+          existingIndex: exclusionIndex,
         });
         sources.x_expansion = { discovered: expanded.length, status: 'ok' };
         counts.x_expanded = expanded.length;
@@ -311,6 +345,21 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     await pLimit(xCandidates, 10, async (packet) => {
       if (Date.now() > xEnrichDeadline || aborted()) return;
 
+      // Pre-enrichment exclusion: skip if already in DB (catches edge cases
+      // the discovery-time filter missed, e.g. domain/email matches)
+      if (exclusionIndex && isAlreadyKnown(packet.creator, exclusionIndex)) {
+        counts.skipped_known_before_enrichment++;
+        counts.enrichment_skipped_known++;
+        return;
+      }
+
+      // Run-level dedup: skip if already processed this run (cross-source)
+      const rk = `x::${packet.creator.account.platform_id.toLowerCase()}`;
+      if (runSeenIndex.platformIds.has(rk)) {
+        counts.skipped_seen_this_run++;
+        return;
+      }
+
       const contact: DiscoveredCreator['contact'] = {};
 
       // Strategy 1: extract email from X bio text directly
@@ -319,7 +368,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
         if (bioEmail) contact.email = bioEmail;
       }
 
-      // Strategy 2: fast-enrich the linked website (root + /contact + /about + link-in-bio)
+      // Strategy 2: fast-enrich the linked website
       if (!contact.email && packet.creator.website) {
         counts.enrichment_attempts++;
         try {
@@ -336,6 +385,19 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
       if (contact.email) counts.x_with_email++;
       counts.x_enriched++;
+
+      // Track in run-level seen set to prevent cross-source duplicates
+      addToIndex(runSeenIndex, {
+        platform: 'x',
+        platformId: packet.creator.account.platform_id,
+        handle: packet.creator.account.handle,
+        email: contact.email ?? undefined,
+      });
+      if (packet.creator.website) {
+        try {
+          addToIndex(runSeenIndex, { domain: new URL(packet.creator.website).hostname.replace(/^www\./, '').toLowerCase() });
+        } catch { /* skip */ }
+      }
 
       if (xEnriched % 10 === 0) {
         emit('x_enrichment', `X enriched ${xEnriched}/${xCandidates.length} (${counts.x_with_email} emails)`, {
@@ -518,6 +580,13 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     });
     if (firm.is_prop_firm) { counts.excluded_prop_firm++; continue; }
 
+    // Pre-discovery exclusion: check against preloaded index
+    // (catches secondary-source candidates not checked during discovery)
+    if (exclusionIndex && isAlreadyKnown(packet.creator, exclusionIndex)) {
+      counts.skipped_known_before_enrichment++;
+      continue;
+    }
+
     preFiltered.push(packet);
   }
 
@@ -566,6 +635,19 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
   await pLimit(enrichTarget, enrichConcurrency, async (packet) => {
     if (Date.now() > enrichmentDeadline || aborted()) return;
+
+    // Run-level dedup: skip if this candidate was already processed earlier
+    const handle = packet.creator.account.handle?.toLowerCase().replace(/^@/, '');
+    const platform = packet.creator.account.platform;
+    if (handle && runSeenIndex.handles.has(`${platform}::${handle}`)) {
+      counts.skipped_seen_this_run++;
+      return;
+    }
+    if (packet.creator.account.platform_id &&
+        runSeenIndex.platformIds.has(`${platform}::${packet.creator.account.platform_id.toLowerCase()}`)) {
+      counts.skipped_seen_this_run++;
+      return;
+    }
 
     let mutableCreator = packet.creator;
 
@@ -631,6 +713,18 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     } catch (err) {
       counts.errors++;
       log.warn('refresh-pipeline: upsert failed', { name: creator.name, error: String(err) });
+    }
+
+    // Track in run-level seen set regardless of upsert outcome
+    addToIndex(runSeenIndex, {
+      platform: creator.account.platform,
+      platformId: creator.account.platform_id,
+      handle: creator.account.handle,
+      email: mutableCreator.contact?.email ?? undefined,
+    });
+    if (mutableCreator.website) {
+      try { addToIndex(runSeenIndex, { domain: new URL(mutableCreator.website).hostname.replace(/^www\./, '').toLowerCase() }); }
+      catch { /* skip */ }
     }
 
     processed++;
@@ -767,6 +861,9 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       x_with_email: counts.x_with_email, hard_filtered: counts.hard_filtered,
       enrichment_rate: result.enrichment_rate,
       elapsed_ms: result.elapsed_ms,
+      skipped_known: counts.skipped_known_before_enrichment,
+      skipped_seen: counts.skipped_seen_this_run,
+      enrichment_saved: counts.enrichment_skipped_known,
     });
     return result;
   }
