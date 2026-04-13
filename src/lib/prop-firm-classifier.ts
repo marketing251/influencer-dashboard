@@ -130,6 +130,49 @@ export function classifyPropFirm(input: {
     }
   }
 
+  // Check 3: Name looks like a company, not an individual creator.
+  // Catches brokerages, platforms, news sites, and generic companies that
+  // aren't in the prop-firm denylist but are still not outreach targets.
+  // Only fires when the safe-signals check above didn't already clear them.
+  if (score < 60) {
+    const companyPatterns = [
+      /\b(?:ltd|inc|llc|corp|limited|plc|gmbh|s\.?a\.?)\b/i,
+      /\b(?:brokerage|broker|exchange|securities)\b/i,
+      /\b(?:platform|software|technology|solutions|fintech)\b/i,
+      /\b(?:trading\s+ltd|trading\s+limited|trading\s+inc)\b/i,
+    ];
+    for (const pattern of companyPatterns) {
+      if (pattern.test(nameLower)) {
+        score += 65;
+        reasons.push(`Name matches company pattern: ${pattern.source}`);
+        break;
+      }
+    }
+  }
+
+  // Check 4: Known non-creator companies (brokerages, platforms, news sites)
+  // that frequently appear in trading searches but are not outreach targets.
+  if (score < 60) {
+    const knownCompanies = [
+      'tradestation', 'ninjatrader', 'tradingview', 'metatrader', 'ctrader',
+      'forex.com', 'ig trading', 'ig markets', 'cmc markets', 'oanda', 'pepperstone',
+      'ic markets', 'fxcm', 'saxo bank', 'interactive brokers', 'td ameritrade',
+      'charles schwab', 'etrade', 'robinhood', 'webull', 'thinkorswim',
+      'benzinga', 'investopedia', 'dailyfx', 'fxstreet', 'forex factory',
+      'myfxbook', 'babypips', 'stocktwits', 'seeking alpha', 'motley fool',
+      'bloomberg', 'reuters', 'cnbc', 'yahoo finance',
+      'grok', // X AI assistant, not a trading creator
+    ];
+    for (const company of knownCompanies) {
+      if (nameLower === company || nameLower === company.replace(/\s+/g, '') ||
+          slugLower === company || slugLower === company.replace(/\s+/g, '')) {
+        score += 65;
+        reasons.push(`Known non-creator company: ${company}`);
+        break;
+      }
+    }
+  }
+
   const is_prop_firm = score >= 60;
   const confidence = Math.min(score, 100);
 

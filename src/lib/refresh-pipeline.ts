@@ -365,8 +365,9 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     secondaryTasks.push((async () => {
       try {
         const priorityGroups: YouTubeKeywordGroup[] = [
-          'forex', 'prop_firm', 'day_trading', 'mentor', 'options',
-          'crypto', 'smart_money', 'futures', 'stocks',
+          'forex_educator', 'trading_mentor', 'day_trading', 'prop_review',
+          'smart_money', 'options_creator', 'crypto_creator', 'stocks_creator',
+          'community', 'psychology',
         ];
         const results = await discoverYouTubeCreators({
           groups: priorityGroups, maxPerQuery: 10, minSubscribers: 100,

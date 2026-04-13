@@ -31,120 +31,99 @@ export interface YouTubeDiscoveryResult { creator: DiscoveredCreator; posts: Dis
 
 // ─── Keyword groups (each refresh can select a subset) ──────────────
 
+// ─── Creator-intent keyword groups ──────────────────────────────────
+//
+// Every query is crafted to find INDIVIDUAL CREATORS (mentors, educators,
+// affiliates, community owners) — NOT companies, brokerages, or prop firms.
+//
+// Signals that indicate an individual creator:
+//   tutorial, explained, for beginners, my journey, course review,
+//   mentor, coach, community, discord, live stream, lifestyle, results
+//
+// Signals that indicate a company (AVOIDED in these queries):
+//   challenge, payout, funding, capital, platform, comparison, software
+
 export const YOUTUBE_KEYWORD_GROUPS = {
-  forex: [
-    'forex trading education course',
-    'forex signals mentor community',
-    'forex trader journey funded',
-    'price action forex trader',
-    'swing trading forex strategy',
-    'forex scalper live trading',
-    'forex trader lifestyle',
+  forex_educator: [
+    'forex trading tutorial for beginners',
+    'forex strategy explained step by step',
+    'forex mentor coaching session',
+    'forex scalping strategy tutorial',
+    'forex trader lifestyle vlog',
   ],
-  prop_firm: [
-    'prop firm funded trader FTMO challenge',
-    'prop firm passing strategy funded',
-    'funded trader results payout proof',
-    'prop firm review funded account',
-    'funded trader journey FTMO payout',
-    'prop firm challenge strategy',
-    'funded account live trading',
+  prop_review: [
+    'prop firm review honest experience',
+    'how to pass prop firm challenge tutorial',
+    'funded trader journey my results',
+    'prop firm strategy for beginners',
   ],
   day_trading: [
-    'day trading live stream education',
-    'day trading strategy beginner',
-    'day trading psychology mindset',
-    'scalping strategy day trader',
-    'day trader morning routine',
-    'day trading live session',
+    'day trading tutorial for beginners',
+    'day trader morning routine live',
+    'day trading strategy explained',
+    'scalping strategy tutorial live',
   ],
   smart_money: [
-    'smart money ICT order block trading',
-    'inner circle trader ICT concepts',
-    'liquidity sweep order flow trading',
-    'market structure smart money',
-    'ICT mentorship silver bullet',
+    'smart money concepts tutorial explained',
+    'ICT trading strategy for beginners',
+    'order block strategy tutorial',
+    'liquidity sweep explained tutorial',
   ],
-  futures: [
-    'futures trading NQ ES scalping',
-    'micro futures day trader education',
-    'futures trader prop firm topstep',
-    'emini futures trader live',
+  trading_mentor: [
+    'trading mentor coaching session',
+    'best trading course review honest',
+    'trading coach strategies explained',
+    'trading community discord free',
+    'trading bootcamp course review',
   ],
-  options: [
-    'options trading strategy course',
-    'options trader coach mentor',
-    'options iron condor spreads education',
-    'options wheel strategy',
-    'zero dte options trader',
-    'options flow unusual trader',
+  options_creator: [
+    'options trading for beginners tutorial',
+    'options strategy explained wheel',
+    'options trader income results',
+    'zero dte options strategy tutorial',
   ],
-  crypto: [
-    'crypto bitcoin trading education',
-    'crypto altcoin swing trading',
+  crypto_creator: [
+    'crypto trading tutorial for beginners',
+    'bitcoin analysis explained today',
     'crypto mentor signals community',
-    'crypto leverage perpetual trader',
-    'crypto futures trading strategy',
-    'bitcoin ethereum trader analysis',
+    'altcoin trading strategy tutorial',
   ],
-  stocks: [
-    'penny stock day trading education',
-    'swing trading stocks strategy',
-    'stock market trader mentor',
-    'small cap momentum trader',
-    'stock picking trader strategy',
+  stocks_creator: [
+    'stock trading for beginners tutorial',
+    'swing trading strategy explained',
+    'penny stock trader results journey',
+    'stock market mentor coaching',
   ],
-  mentor: [
-    'trading mentor coaching discord',
-    'trading academy course mentorship',
-    'best traders to follow 2025',
-    'trading bootcamp online education',
-    'trading community signals coach',
-    'trading lifestyle entrepreneur',
+  psychology: [
+    'trading psychology mindset tips',
+    'how to be profitable trader discipline',
+    'trading journal strategy explained',
+    'trader mindset coaching session',
   ],
-  // ── new groups (source diversification) ──
-  algo: [
-    'algo trading strategy python',
-    'algorithmic trader backtesting',
-    'trading bot automated strategy',
-    'quant trader strategy',
-  ],
-  technical_analysis: [
-    'technical analysis trader chart patterns',
-    'fibonacci trader strategy',
-    'elliott wave trader analysis',
-    'chart patterns trader tutorial',
-  ],
-  indicators: [
-    'RSI indicator trading strategy',
-    'MACD trader strategy',
-    'moving average trader strategy',
-    'volume profile trader strategy',
-  ],
-  risk_management: [
-    'trading risk management psychology',
-    'trader journal discipline strategy',
-    'position sizing trader strategy',
+  community: [
+    'trading discord community free join',
+    'trading signals telegram results',
+    'trading room live session free',
   ],
   beginner: [
-    'beginner trader tutorial guide',
-    'learn trading from scratch',
-    'trading for beginners course',
-  ],
-  podcast: [
-    'trading podcast interview mentor',
-    'trader interview success story',
-    'chat with traders podcast',
+    'learn trading from scratch tutorial',
+    'trading for beginners complete guide',
+    'how to start trading forex tutorial',
   ],
   live_stream: [
-    'live trading stream day trader',
-    'trading room live call',
-    'market open live trading',
+    'live trading stream session today',
+    'market open live trading room',
+    'live forex trading session',
   ],
-  news_analysis: [
-    'market analysis daily trader',
-    'trading weekly outlook forex',
-    'economic calendar trader news',
+  technical_analysis: [
+    'price action trading tutorial',
+    'chart patterns explained for beginners',
+    'fibonacci trading strategy tutorial',
+  ],
+  futures_creator: [
+    'futures trading tutorial for beginners',
+    'NQ ES scalping strategy explained',
+    'micro futures trader live session',
   ],
 } as const;
 

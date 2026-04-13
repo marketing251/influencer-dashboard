@@ -71,30 +71,47 @@ interface XUsersResponse {
   meta?: { next_token?: string; result_count?: number };
 }
 
-// ─── Search queries — 18 trading-niche queries ──────────────────────
+// ─── Search queries — creator-intent focused ────────────────────────
+//
+// 70% creator-intent (find individual educators/mentors/affiliates)
+// 30% transformed prop-related (find people REVIEWING/DISCUSSING firms)
+//
+// Key principle: every query includes language that signals an individual
+// creator (review, tutorial, journey, mentor, course, community, my, I)
+// rather than a company (challenge, payout, platform, capital, funding).
 
-const TRADING_QUERIES = [
-  // Original 7
-  '"prop firm" (funded OR challenge OR payout) -is:retweet lang:en',
-  '"FTMO" (passed OR challenge OR funded) -is:retweet lang:en',
-  '"funded trader" (results OR profit OR account) -is:retweet lang:en',
-  '"trading course" (forex OR futures OR options) -is:retweet lang:en',
-  '"smart money" (ICT OR order block OR fair value gap) -is:retweet lang:en',
-  '"day trading" (live OR education OR mentor) -is:retweet lang:en',
-  '(MyFundedFX OR FundedNext OR The5ers) (passed OR payout) -is:retweet lang:en',
-  // Niche expansion (11 new)
-  '"price action" (strategy OR setup) -is:retweet lang:en',
-  '"supply demand" (trading OR zones) -is:retweet lang:en',
-  '"forex signals" (results OR performance) -is:retweet lang:en',
-  '"options trading" (spreads OR calls OR puts) -is:retweet lang:en',
-  '"trading psychology" (mindset OR discipline) -is:retweet lang:en',
-  '"funded account" (payout OR profit split) -is:retweet lang:en',
-  '"NAS100" OR "XAUUSD" (analysis OR setup) -is:retweet lang:en',
-  '"copy trading" OR "signal provider" (forex OR futures) -is:retweet lang:en',
-  '"algo trading" OR "trading bot" (results OR backtest) -is:retweet lang:en',
-  '"trading education" (free OR join OR community) -is:retweet lang:en',
-  '"forex mentor" OR "trading mentor" (course OR coaching) -is:retweet lang:en',
+const CREATOR_INTENT_QUERIES = [
+  // ── Mentors & educators ──
+  '"trading mentor" (course OR coaching OR join) -is:retweet lang:en',
+  '"forex mentor" OR "forex coach" (strategy OR beginner) -is:retweet lang:en',
+  '"trading teacher" OR "forex educator" (tutorial OR lesson) -is:retweet lang:en',
+  // ── Communities & signals ──
+  '"trading community" (discord OR telegram OR free) -is:retweet lang:en',
+  '"trading signals" (proof OR results OR join) -is:retweet lang:en',
+  '"trading discord" (free OR join OR members) -is:retweet lang:en',
+  // ── Courses & content ──
+  '"trading course" (review OR honest OR worth) -is:retweet lang:en',
+  '"my trading journey" (forex OR futures OR crypto) -is:retweet lang:en',
+  '"live trading" (stream OR session OR room) -is:retweet lang:en',
+  // ── Strategy creators ──
+  '"price action" (tutorial OR strategy OR explained) -is:retweet lang:en',
+  '"smart money concepts" (tutorial OR explained OR ICT) -is:retweet lang:en',
+  '"trading psychology" (mindset OR discipline OR coach) -is:retweet lang:en',
+  // ── Niche creators ──
+  '"day trader" (lifestyle OR results OR routine) -is:retweet lang:en',
+  '"crypto trader" (analysis OR education OR signals) -is:retweet lang:en',
+  '"options trader" (income OR strategy OR tutorial) -is:retweet lang:en',
+  '"forex scalper" OR "scalping strategy" (tutorial OR explained) -is:retweet lang:en',
 ];
+
+const PROP_REVIEW_QUERIES = [
+  // ── People REVIEWING/DISCUSSING prop firms (not the firms themselves) ──
+  '"prop firm" (review OR experience OR honest) -is:retweet lang:en',
+  '"prop firm challenge" (passed OR "how to pass" OR strategy) -is:retweet lang:en',
+  '"funded trader" (journey OR "my results" OR proof) -is:retweet lang:en',
+];
+
+const TRADING_QUERIES = [...CREATOR_INTENT_QUERIES, ...PROP_REVIEW_QUERIES];
 
 // ─── Rate-limit-aware API helpers ───────────────────────────────────
 

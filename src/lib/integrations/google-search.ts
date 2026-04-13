@@ -137,52 +137,47 @@ export async function googleSearchMany(
  * Each query is crafted to surface educator/mentor/influencer profiles
  * on the target social site.
  */
+/**
+ * Creator-intent queries for per-platform discovery.
+ * Every query is designed to find INDIVIDUAL CREATORS (mentors, educators,
+ * content creators) — NOT companies, brokerages, or prop firms.
+ */
 export const TRADING_QUERIES = {
   instagram: [
-    // original tier (broad)
-    'forex trader mentor',
-    'day trading coach',
+    // ── Creator-intent (individuals who teach/mentor) ──
+    'forex trading mentor',
+    'trading coach educator',
     'crypto trader educator',
-    'prop firm funded trader',
-    'smart money ICT trader',
-    'options trading mentor',
-    'futures trader course',
-    'trading academy community',
-    // long-tail expansion
-    'forex scalper strategy',
-    'swing trader community',
-    'copy trader signals',
-    'trading discord community',
-    'trading live stream',
-    'trading bot algo',
-    'funded trader journey',
-    'crypto leverage trader',
-    'price action trader',
+    'day trading mentor',
+    'trading signals community',
+    'trading course review',
+    'options trading educator',
     'trading psychology coach',
-    'beginner forex trader',
-    'day trader lifestyle',
+    'price action trader tutorial',
+    'smart money concepts educator',
+    'trading discord community',
+    'forex scalper strategy tutorial',
+    'swing trader mentor',
+    'trading lifestyle vlog',
+    // ── Prop review (people reviewing, not firms) ──
+    'prop firm review experience',
+    'funded trader journey results',
   ],
   linkedin: [
-    // original tier
-    'forex trader educator',
+    // ── Individual educators and founders ──
+    'forex trading educator',
     'trading mentor coach',
-    'prop trading firm founder',
-    'day trader founder',
-    'options trading coach',
-    'trading academy founder',
-    'quantitative trader educator',
-    'crypto trading mentor',
-    // long-tail expansion
-    'algorithmic trader founder',
-    'trading firm CEO',
-    'trading signals provider',
+    'trading course creator',
+    'day trading educator',
+    'options trading educator',
     'trading community founder',
-    'trader coach entrepreneur',
-    'trading fund manager',
-    'forex broker executive',
-    'crypto fund manager',
+    'crypto trading mentor',
+    'trading coach entrepreneur',
+    'financial educator trading',
     'trading book author',
-    'financial educator trader',
+    // ── Prop review (individuals) ──
+    'funded trader results journey',
+    'prop firm experience review',
   ],
 } as const;
 
@@ -192,23 +187,27 @@ export const TRADING_QUERIES = {
  * covers instagram/linkedin/twitter/youtube/reddit/medium/etc., and we
  * classify each result by its hostname.
  */
+/**
+ * Cross-platform queries — find creators across all sites in the CSE engine.
+ * Creator-intent focused: every query signals an individual, not a company.
+ */
 export const CROSS_PLATFORM_QUERIES = [
-  'forex trader mentor',
-  'day trading coach',
-  'prop firm funded trader',
-  'trading mentor course',
-  'crypto trader signals',
-  'options trading educator',
-  'futures trader strategy',
-  'swing trader community',
-  'trading academy',
-  'trading discord server',
-  'algo trader backtesting',
-  'smart money ICT mentor',
-  'scalping strategy trader',
-  'trading bot automation',
-  'copy trading signals',
-  'trading psychology coach',
+  'forex trading mentor coach',
+  'day trading educator tutorial',
+  'trading course review honest',
+  'crypto trading mentor signals',
+  'options trading educator tutorial',
+  'trading community discord free',
+  'smart money concepts tutorial',
+  'trading psychology coach mindset',
+  'price action strategy tutorial',
+  'funded trader journey experience',
+  'prop firm review honest',
+  'trading mentor coaching session',
+  'scalping strategy tutorial explained',
+  'swing trading mentor course',
+  'trading signals results proof',
+  'live trading stream session',
 ];
 
 // ─── Multi-platform discovery ───────────────────────────────────────
