@@ -121,6 +121,51 @@ CREATE INDEX idx_daily_discoveries_date ON daily_discoveries(run_date DESC);
 CREATE INDEX idx_outreach_creator ON outreach(creator_id);
 CREATE INDEX idx_outreach_status ON outreach(status);
 
+-- ═══════════════════════════════════════════════════════════════════
+-- Migration: Performance indexes for duplicate exclusion at scale
+-- Run these on Supabase SQL Editor. All use IF NOT EXISTS — safe to re-run.
+-- ═══════════════════════════════════════════════════════════════════
+
+-- CRITICAL: excluded_from_leads is filtered on EVERY Daily Leads query
+-- Without this, every page load scans all rows
+CREATE INDEX IF NOT EXISTS idx_creators_excluded ON creators(excluded_from_leads);
+
+-- CRITICAL: email-based dedup + "has email" filter
+-- Partial index: only indexes non-null emails (saves space)
+CREATE INDEX IF NOT EXISTS idx_creators_email ON creators(public_email) WHERE public_email IS NOT NULL;
+
+-- CRITICAL: website-based dedup + "has website" filter
+CREATE INDEX IF NOT EXISTS idx_creators_website_notnull ON creators(website) WHERE website IS NOT NULL;
+
+-- Daily Leads page filtering
+CREATE INDEX IF NOT EXISTS idx_creators_confidence ON creators(confidence_score DESC);
+CREATE INDEX IF NOT EXISTS idx_creators_followers ON creators(total_followers DESC);
+CREATE INDEX IF NOT EXISTS idx_creators_phone ON creators(public_phone) WHERE public_phone IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_creators_contact_form ON creators(contact_form_url) WHERE contact_form_url IS NOT NULL;
+
+-- Case-insensitive handle dedup (avoids .ilike() full scans)
+CREATE INDEX IF NOT EXISTS idx_accounts_handle_lower ON creator_accounts(platform, LOWER(handle));
+
+-- Prop-firm backfill composite
+CREATE INDEX IF NOT EXISTS idx_creators_prop_status ON creators(excluded_from_leads, is_prop_firm);
+
+-- DB-level email uniqueness safety net (prevents race-condition duplicates)
+-- Partial + case-insensitive: NULLs don't conflict, case variations are caught.
+-- If this fails because duplicates already exist, run the dedup query below first:
+--
+--   DELETE FROM creators WHERE id IN (
+--     SELECT id FROM (
+--       SELECT id, ROW_NUMBER() OVER (
+--         PARTITION BY LOWER(public_email) ORDER BY lead_score DESC, created_at ASC
+--       ) AS rn FROM creators WHERE public_email IS NOT NULL
+--     ) sub WHERE rn > 1
+--   );
+--
+CREATE UNIQUE INDEX IF NOT EXISTS idx_creators_email_unique
+  ON creators(LOWER(public_email)) WHERE public_email IS NOT NULL;
+
+-- ═══════════════════════════════════════════════════════════════════
+
 -- Migration helper: add columns to existing table if upgrading
 -- ALTER TABLE creators ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMPTZ DEFAULT NOW();
 -- ALTER TABLE creators ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ DEFAULT NOW();

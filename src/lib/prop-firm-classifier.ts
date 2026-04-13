@@ -192,43 +192,80 @@ export function isKnownPropFirm(name: string, slug?: string | null, website?: st
 
 /**
  * Back-fill `excluded_from_leads = true` on any existing rows that match
- * the denylist. Runs once per refresh so freshly promoted firms disappear
- * from lead queries without a full table scan.
+ * the denylist. Runs once per refresh.
+ *
+ * Optimized: instead of 120 individual `.ilike()` UPDATE queries (each a
+ * full table scan), loads all non-excluded creators in one query, checks
+ * names/domains in app logic, then batch-updates by ID. Reduces DB round
+ * trips from ~120 to 2 (1 SELECT + 1 UPDATE).
  *
  * Returns the number of rows updated.
  */
 export async function backfillPropFirmExclusion(): Promise<number> {
   if (!isSupabaseConfigured()) return 0;
-  let total = 0;
 
-  // Update by exact name match (case-insensitive)
-  for (const firm of KNOWN_FIRM_NAMES) {
+  // Step 1: Load all non-excluded creators (compact: only id, name, website)
+  const PAGE = 1000;
+  const toExclude: string[] = [];
+  let offset = 0;
+
+  while (true) {
     try {
-      const { count } = await supabaseAdmin
+      const { data } = await supabaseAdmin
         .from('creators')
-        .update({ excluded_from_leads: true, is_prop_firm: true }, { count: 'exact' })
-        .ilike('name', firm)
-        .neq('excluded_from_leads', true);
-      if (count) total += count;
-    } catch {
-      // ignore individual failures — backfill is best-effort
-    }
+        .select('id, name, website')
+        .neq('excluded_from_leads', true)
+        .range(offset, offset + PAGE - 1);
+      if (!data || data.length === 0) break;
+
+      // Step 2: Check each creator against denylist in app logic (fast, in-memory)
+      for (const row of data) {
+        const nameLower = (row.name ?? '').toLowerCase().trim();
+        const nameNorm = nameLower.replace(/\s+/g, '');
+
+        let matched = false;
+        for (const firm of KNOWN_FIRM_NAMES) {
+          const firmNorm = firm.replace(/\s+/g, '');
+          if (nameLower === firm || nameNorm === firmNorm ||
+              nameLower.startsWith(firm + ' ') ||
+              (nameNorm.startsWith(firmNorm) && nameNorm.length < firmNorm.length + 15)) {
+            matched = true;
+            break;
+          }
+        }
+
+        if (!matched && row.website) {
+          const websiteLower = row.website.toLowerCase();
+          for (const domain of FIRM_DOMAINS) {
+            if (websiteLower.includes(domain)) {
+              matched = true;
+              break;
+            }
+          }
+        }
+
+        if (matched) toExclude.push(row.id);
+      }
+
+      if (data.length < PAGE) break;
+      offset += PAGE;
+    } catch { break; }
   }
 
-  // Update by website domain
-  for (const domain of FIRM_DOMAINS) {
+  // Step 3: Single batch UPDATE by IDs
+  if (toExclude.length > 0) {
     try {
-      const { count } = await supabaseAdmin
-        .from('creators')
-        .update({ excluded_from_leads: true, is_prop_firm: true }, { count: 'exact' })
-        .ilike('website', `%${domain}%`)
-        .neq('excluded_from_leads', true);
-      if (count) total += count;
-    } catch {
-      // ignore
+      for (let i = 0; i < toExclude.length; i += 200) {
+        const chunk = toExclude.slice(i, i + 200);
+        await supabaseAdmin
+          .from('creators')
+          .update({ excluded_from_leads: true, is_prop_firm: true })
+          .in('id', chunk);
+      }
+    } catch (err) {
+      log.warn('prop-firm: batch update failed', { error: String(err) });
     }
+    log.info('prop-firm: backfill excluded rows', { total: toExclude.length });
   }
-
-  if (total > 0) log.info('prop-firm: backfill excluded rows', { total });
-  return total;
+  return toExclude.length;
 }

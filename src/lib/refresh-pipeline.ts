@@ -760,6 +760,8 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
         if (leads && leads.length > 0) {
           let followupProcessed = 0;
+          const enrichedIds: string[] = []; // collect for batch scoring
+
           await pLimit(leads, Math.min(enrichConcurrency, leads.length), async (lead) => {
             if (remaining() < 5_000 || aborted()) return;
             if (!lead.website) return;
@@ -773,14 +775,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
               if (enr.contact_form_url && !lead.contact_form_url) { updates.contact_form_url = enr.contact_form_url; counts.with_form++; changed = true; }
               if (changed) {
                 await supabaseAdmin.from('creators').update(updates).eq('id', lead.id);
-                const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', lead.id).single();
-                const { data: accs } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', lead.id);
-                if (full) {
-                  await supabaseAdmin.from('creators').update({
-                    lead_score: computeLeadScore({ creator: full, accounts: accs ?? [] }),
-                    confidence_score: computeConfidenceScore({ creator: full, accounts: accs ?? [] }),
-                  }).eq('id', lead.id);
-                }
+                enrichedIds.push(lead.id);
               }
             } catch { counts.errors++; }
             followupProcessed++;
@@ -790,6 +785,33 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
               });
             }
           }, () => remaining() < 5_000 || aborted());
+
+          // Batch score recomputation — runs ONCE after all enrichments instead
+          // of 3 round-trips per enriched lead (was: SELECT full + SELECT accs + UPDATE scores)
+          if (enrichedIds.length > 0 && remaining() > 3_000) {
+            for (let i = 0; i < enrichedIds.length; i += 50) {
+              const chunk = enrichedIds.slice(i, i + 50);
+              try {
+                const { data: fullRows } = await supabaseAdmin
+                  .from('creators').select('*').in('id', chunk);
+                const { data: allAccs } = await supabaseAdmin
+                  .from('creator_accounts').select('creator_id, followers, platform, verified')
+                  .in('creator_id', chunk);
+                const accsByCreator = new Map<string, typeof allAccs>();
+                for (const acc of allAccs ?? []) {
+                  const arr = accsByCreator.get(acc.creator_id) ?? [];
+                  arr.push(acc);
+                  accsByCreator.set(acc.creator_id, arr);
+                }
+                for (const full of fullRows ?? []) {
+                  const accs = accsByCreator.get(full.id) ?? [];
+                  const ls = computeLeadScore({ creator: full, accounts: accs });
+                  const cs = computeConfidenceScore({ creator: full, accounts: accs });
+                  await supabaseAdmin.from('creators').update({ lead_score: ls, confidence_score: cs }).eq('id', full.id);
+                }
+              } catch { /* batch scoring best-effort */ }
+            }
+          }
         }
       } catch (err) {
         log.warn('refresh-pipeline: follow-up enrichment failed', { error: String(err) });

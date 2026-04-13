@@ -168,11 +168,19 @@ export async function buildExistingIndex(
     }
   }
 
-  // Batch query creators by domain (exact hostname match is cheaper than ilike)
+  // Batch query creators by domain — uses protocol-anchored patterns
+  // so the B-tree index on `website` can be used (unlike the old
+  // `%domain%` wildcard which always caused full table scans).
   const domainArr = [...domains];
-  for (let i = 0; i < domainArr.length; i += 100) {
-    const chunk = domainArr.slice(i, i + 100);
-    const filter = chunk.map(d => `website.ilike.%${d}%`).join(',');
+  for (let i = 0; i < domainArr.length; i += 50) {
+    const chunk = domainArr.slice(i, i + 50);
+    // For each domain, match the 4 common URL patterns the website column stores
+    const filter = chunk.flatMap(d => [
+      `website.ilike.https://${d}%`,
+      `website.ilike.https://www.${d}%`,
+      `website.ilike.http://${d}%`,
+      `website.ilike.http://www.${d}%`,
+    ]).join(',');
     if (!filter) continue;
     try {
       const { data } = await supabaseAdmin.from('creators').select('website').or(filter);
