@@ -32,26 +32,28 @@ export async function POST() {
     return NextResponse.json({ error: discoverError }, { status: 500 });
   }
 
+  const xResults = discoveries.results;
+
   let newCount = 0;
   let updatedCount = 0;
   const errors: string[] = [];
 
-  for (const { creator, posts } of discoveries) {
+  for (const { creator, posts } of xResults) {
     const result = await upsertCreator(creator, posts);
     if (result.action === 'created') newCount++;
     else if (result.action === 'updated') updatedCount++;
     if (result.error) errors.push(`${result.name}: ${result.error}`);
   }
 
-  const status = errors.length > discoveries.length / 2 ? 'failed' : 'completed';
+  const status = errors.length > xResults.length / 2 ? 'failed' : 'completed';
   await logDiscoveryRun('x', newCount, updatedCount, errors, status as 'completed' | 'failed');
 
   const summary = {
     message: 'X discovery completed',
-    discovered: discoveries.length,
+    discovered: xResults.length,
     new: newCount,
     updated: updatedCount,
-    skipped: discoveries.length - newCount - updatedCount,
+    skipped: xResults.length - newCount - updatedCount,
     errors: errors.length,
     error_details: errors.slice(0, 10),
     database: isSupabaseConfigured() ? 'connected' : 'not configured',

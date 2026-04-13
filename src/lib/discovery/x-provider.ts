@@ -11,11 +11,12 @@ export const xProvider: DiscoveryProvider = {
   },
 
   async discover(): Promise<DiscoveryResult[]> {
-    return discoverXCreators({
+    const { results } = await discoverXCreators({
       maxPerQuery: 20,
       minFollowers: 1_000,
       delayMs: 2_000,
     });
+    return results;
   },
 
   configHint() {

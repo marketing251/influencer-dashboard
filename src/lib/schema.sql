@@ -92,6 +92,30 @@ CREATE TABLE daily_discoveries (
   status TEXT DEFAULT 'running' CHECK (status IN ('running', 'completed', 'failed'))
 );
 
+-- Keyword-yield analytics: tracks per-keyword discovery performance
+-- across refreshes so the pipeline can prioritize high-yield keywords.
+CREATE TABLE IF NOT EXISTS keyword_performance (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  platform TEXT NOT NULL,
+  keyword TEXT NOT NULL,
+  category TEXT,
+  total_runs INT DEFAULT 0,
+  total_candidates INT DEFAULT 0,
+  total_known_skipped INT DEFAULT 0,
+  total_inserted INT DEFAULT 0,
+  total_with_email INT DEFAULT 0,
+  total_duplicates INT DEFAULT 0,
+  total_rejected INT DEFAULT 0,
+  performance_score REAL DEFAULT 50.0,
+  last_used_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(platform, keyword)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kp_platform_score
+  ON keyword_performance(platform, performance_score DESC);
+
 -- Outreach tracking
 CREATE TABLE outreach (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

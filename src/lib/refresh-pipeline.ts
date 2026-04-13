@@ -23,8 +23,17 @@ import {
 import {
   discoverXCreators,
   discoverXExpansion,
+  TRADING_QUERIES as X_TRADING_QUERIES,
+  getQueryCategory,
   type XDiscoveryResult,
 } from './integrations/x';
+import {
+  allocateKeywordBudget,
+  recordKeywordBatchMetrics,
+  updateKeywordInsertMetrics,
+  getTopPerformingKeywords,
+  type KeywordBatchMetric,
+} from './keyword-analytics';
 import { discoverViaWebSearch } from './integrations/web-search';
 import { fastEnrich, isPlaceholderEmail, extractEmailFromBio } from './integrations/fast-enrich';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
@@ -263,25 +272,39 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   // source — everything else is supplementary.
   // ═══════════════════════════════════════════════════════════════════
 
+  let xQueryMetrics: KeywordBatchMetric[] = [];
+
   if (hasX) {
     emit('x_discovery', 'X Primary Discovery — searching trading keywords');
     const xBudgetDeadline = Math.min(Date.now() + 60_000, deadline - 120_000);
     const xSignal = timeoutSignal(xBudgetDeadline, signal);
 
+    // Adaptive allocation: reorder X queries based on historical performance
+    let xQueries: string[] | undefined;
+    try {
+      xQueries = await allocateKeywordBudget('x', [...X_TRADING_QUERIES]);
+    } catch { /* use default order */ }
+
     let xResults: XDiscoveryResult[] = [];
     try {
-      xResults = await discoverXCreators({
+      const xOutput = await discoverXCreators({
         maxPerQuery: 100,
         minFollowers: 500,
         delayMs: 1_500,
         maxPages: 2,
         signal: xSignal,
         existingIndex: exclusionIndex,
+        queries: xQueries,
       });
+      xResults = xOutput.results;
+      xQueryMetrics = xOutput.queryMetrics;
       sources.x = { discovered: xResults.length, status: 'ok' };
       counts.x_discovered = xResults.length;
       counts.discovered += xResults.length;
       emit('x_discovery', `X search returned ${xResults.length} candidates`);
+
+      // Record per-keyword discovery metrics (async, don't block pipeline)
+      recordKeywordBatchMetrics(xQueryMetrics).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       sources.x = { discovered: 0, status: 'error', note: msg };
@@ -700,6 +723,11 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
         if (result.had_email) counts.with_email++;
         if (result.had_phone) counts.with_phone++;
         if (result.had_form) counts.with_form++;
+        // Update keyword analytics with insert + email data
+        const xr = packet as { _sourceQuery?: string };
+        if (xr._sourceQuery && creator.account.platform === 'x') {
+          updateKeywordInsertMetrics('x', xr._sourceQuery, Boolean(result.had_email)).catch(() => {});
+        }
       } else if (result.action === 'updated') {
         counts.duplicates++;
         if (result.had_email) counts.with_email++;
@@ -853,6 +881,32 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       }
     } catch { /* ignore */ }
   }
+
+  // ─── Keyword analytics summary logging ─────────────────────────────
+  if (xQueryMetrics.length > 0) {
+    const topQueries = xQueryMetrics
+      .filter(m => m.new_users > 0)
+      .sort((a, b) => b.new_users - a.new_users)
+      .slice(0, 5);
+    const worstQueries = xQueryMetrics
+      .filter(m => m.candidates_found >= 5)
+      .sort((a, b) => (b.known_skipped / Math.max(b.candidates_found, 1)) - (a.known_skipped / Math.max(a.candidates_found, 1)))
+      .slice(0, 3);
+    log.info('keyword-analytics: X query performance this run', {
+      totalQueries: xQueryMetrics.length,
+      topYield: topQueries.map(m => ({ kw: m.keyword.slice(0, 40), newUsers: m.new_users, category: m.category })),
+      worstDupRate: worstQueries.map(m => ({ kw: m.keyword.slice(0, 40), dupRate: Math.round(100 * m.known_skipped / Math.max(m.candidates_found, 1)) + '%' })),
+    });
+  }
+
+  // Log top historical performers (async, non-blocking)
+  getTopPerformingKeywords('x', 5).then(top => {
+    if (top.length > 0) {
+      log.info('keyword-analytics: top historical X keywords', {
+        top: top.map(k => ({ kw: k.keyword.slice(0, 40), score: k.performance_score, emails: k.total_with_email })),
+      });
+    }
+  }).catch(() => {});
 
   return finalize(aborted() ? 'aborted' : timeIsUp() ? 'time_budget' : 'completed');
 

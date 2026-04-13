@@ -17,6 +17,7 @@
 import { log } from '../logger';
 import type { DiscoveredCreator, DiscoveredPost } from '../pipeline';
 import { isHandleKnown, type ExistingIndex } from '../pipeline';
+import { shouldAbortBatchEarly, type KeywordBatchMetric } from '../keyword-analytics';
 
 const BASE_URL = 'https://api.twitter.com/2';
 
@@ -149,6 +150,25 @@ const TRADING_QUERIES = [
   '"ai trading" OR "trading bot" (results OR review) -is:retweet lang:en',
   '"algorithmic trading" (strategy OR backtest OR results) -is:retweet lang:en',
 ];
+
+// ─── Keyword → category mapping ─────────────────────────────────────
+
+const TIER_1_END = TIER_1_MONETIZED.length;
+const TIER_2_END = TIER_1_END + TIER_2_AUTHORITY.length;
+const TIER_3_END = TIER_2_END + TIER_3_STRATEGY.length;
+const TIER_4_END = TIER_3_END + TIER_4_PROP_ADJACENT.length;
+
+export function getQueryCategory(query: string): string {
+  const idx = TRADING_QUERIES.indexOf(query);
+  if (idx < 0) return 'custom';
+  if (idx < TIER_1_END) return 'monetized_creators';
+  if (idx < TIER_2_END) return 'authority_results';
+  if (idx < TIER_3_END) return 'strategy_education';
+  if (idx < TIER_4_END) return 'prop_adjacent';
+  return 'ai_modern';
+}
+
+export { TRADING_QUERIES };
 
 // ─── Rate-limit-aware API helpers ───────────────────────────────────
 
@@ -347,6 +367,14 @@ function toDiscoveredPost(tweet: XTweet): DiscoveredPost {
 export interface XDiscoveryResult {
   creator: DiscoveredCreator;
   posts: DiscoveredPost[];
+  /** The query that first discovered this user (for keyword analytics). */
+  _sourceQuery?: string;
+  _sourceCategory?: string;
+}
+
+export interface XDiscoveryOutput {
+  results: XDiscoveryResult[];
+  queryMetrics: KeywordBatchMetric[];
 }
 
 export interface XDiscoverOpts {
@@ -366,8 +394,13 @@ export interface XDiscoverOpts {
 /**
  * Run a full X discovery sweep. Tier-adaptive: reads x-rate-limit-remaining
  * after each call and stops early when the rate budget is nearly exhausted.
+ *
+ * Returns both the discovery results AND per-query metrics for the keyword
+ * analytics system. The metrics track per-query candidate counts and
+ * known-account skip rates so the adaptive allocation can learn which
+ * queries produce the best net-new leads.
  */
-export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscoveryResult[]> {
+export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscoveryOutput> {
   const {
     maxPerQuery = 100,
     minFollowers = 500,
@@ -385,6 +418,11 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
   const userMap = new Map<string, XUser>();
   const tweetsByAuthor = new Map<string, XTweet[]>();
 
+  // Per-query tracking: which query discovered each user first
+  const userDiscoveredBy = new Map<string, number>(); // userId → queryIndex
+  const perQueryCandidates = new Map<number, number>(); // queryIndex → candidates count
+  const queryMetrics: KeywordBatchMetric[] = [];
+
   // Phase 1: Search tweets — tier-adaptive, stops when rate budget low
   for (let i = 0; i < queryList.length; i++) {
     if (signal?.aborted) break;
@@ -394,20 +432,52 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
     }
 
     const query = queryList[i];
+    const preUserCount = userMap.size;
     try {
       const result = await searchRecentTweets(query, maxPerQuery);
+      // Track which users are new from THIS query
+      for (const u of result.users) {
+        if (!userMap.has(u.id)) userDiscoveredBy.set(u.id, i);
+      }
       indexResults(result, userMap, tweetsByAuthor);
-      log.debug('x.discover: query done', { query: query.slice(0, 50), tweets: result.tweets.length, users: result.users.length, rateRemaining: rateLimitRemaining });
 
-      // Pagination: fetch page 2+ if rate budget allows
-      let nextToken = result.nextToken;
-      for (let page = 1; page < maxPages && nextToken && hasRateBudget(3) && !signal?.aborted; page++) {
-        await delay(delayMs);
-        const pageResult = await searchRecentTweets(query, maxPerQuery, nextToken);
-        indexResults(pageResult, userMap, tweetsByAuthor);
-        nextToken = pageResult.nextToken;
+      const newFromQuery = userMap.size - preUserCount;
+      perQueryCandidates.set(i, (perQueryCandidates.get(i) ?? 0) + newFromQuery);
+      log.debug('x.discover: query done', { query: query.slice(0, 50), tweets: result.tweets.length, newUsers: newFromQuery, rateRemaining: rateLimitRemaining });
+
+      // Early-stop: if this query's results are mostly known, skip pagination
+      const knownCount = existingIndex
+        ? result.users.filter(u => isHandleKnown('x', u.id, u.username, existingIndex)).length
+        : 0;
+      const batchMetric: KeywordBatchMetric = {
+        platform: 'x', keyword: query, category: getQueryCategory(query),
+        discovery_method: 'keyword_search',
+        candidates_found: result.users.length, known_skipped: knownCount,
+        new_users: newFromQuery,
+      };
+
+      if (shouldAbortBatchEarly(batchMetric)) {
+        log.debug('x.discover: skipping pagination — high duplicate rate', { query: query.slice(0, 50), dupRate: knownCount / Math.max(result.users.length, 1) });
+      } else {
+        // Pagination: fetch page 2+ if rate budget allows
+        let nextToken = result.nextToken;
+        for (let page = 1; page < maxPages && nextToken && hasRateBudget(3) && !signal?.aborted; page++) {
+          await delay(delayMs);
+          const prePage = userMap.size;
+          const pageResult = await searchRecentTweets(query, maxPerQuery, nextToken);
+          for (const u of pageResult.users) {
+            if (!userMap.has(u.id)) userDiscoveredBy.set(u.id, i);
+          }
+          indexResults(pageResult, userMap, tweetsByAuthor);
+          const pageNew = userMap.size - prePage;
+          batchMetric.candidates_found += pageResult.users.length;
+          batchMetric.new_users += pageNew;
+          perQueryCandidates.set(i, (perQueryCandidates.get(i) ?? 0) + pageNew);
+          nextToken = pageResult.nextToken;
+        }
       }
 
+      queryMetrics.push(batchMetric);
       if (i < queryList.length - 1) await delay(delayMs);
     } catch (err) {
       log.warn('x.discover: query failed', { query: query.slice(0, 50), error: String(err) });
@@ -422,6 +492,7 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
     uniqueUsers: userMap.size,
     totalTweets: [...tweetsByAuthor.values()].reduce((s, t) => s + t.length, 0),
     rateRemaining: rateLimitRemaining,
+    queriesWithMetrics: queryMetrics.length,
   });
 
   // Phase 2: Filter, exclude known, and normalize
@@ -432,12 +503,13 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
     const followers = user.public_metrics?.followers_count ?? 0;
     if (followers < minFollowers) continue;
 
-    // Pre-discovery exclusion: skip accounts already in the DB
     if (existingIndex && isHandleKnown('x', user.id, user.username, existingIndex)) {
       skippedKnown++;
       continue;
     }
 
+    const queryIdx = userDiscoveredBy.get(userId) ?? 0;
+    const sourceQuery = queryList[queryIdx] ?? '';
     const creator = toDiscoveredCreator(user);
     const tweets = tweetsByAuthor.get(userId) ?? [];
     const uniqueTweets = [...new Map(tweets.map(t => [t.id, t])).values()]
@@ -445,12 +517,16 @@ export async function discoverXCreators(opts?: XDiscoverOpts): Promise<XDiscover
       .slice(0, 10);
 
     const posts = uniqueTweets.map(toDiscoveredPost);
-    results.push({ creator, posts });
+    results.push({
+      creator, posts,
+      _sourceQuery: sourceQuery,
+      _sourceCategory: getQueryCategory(sourceQuery),
+    });
   }
 
   results.sort((a, b) => b.creator.account.followers - a.creator.account.followers);
   log.info('x.discover: complete', { creators: results.length, skippedKnown });
-  return results;
+  return { results, queryMetrics };
 }
 
 function indexResults(
