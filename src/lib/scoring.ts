@@ -1,4 +1,5 @@
 import type { Creator, CreatorAccount } from './types';
+import { emailQualityScore } from './integrations/fast-enrich';
 
 interface ScoreInput {
   creator: Partial<Creator>;
@@ -19,8 +20,8 @@ export function computeLeadScore({ creator, accounts }: ScoreInput): number {
   else if (total >= 10_000) score += 10;
   else if (total >= 1_000) score += 5;
 
-  // Contact info — email is the #1 outreach signal
-  if (creator.public_email) score += 25;
+  // Contact info — quality-aware email scoring (15-25 points based on domain/alias)
+  if (creator.public_email) score += emailQualityScore(creator.public_email);
   if (creator.public_phone) score += 10;
   if (creator.website) score += 5;
 

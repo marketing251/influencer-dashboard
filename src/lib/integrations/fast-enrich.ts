@@ -107,18 +107,80 @@ export function isPlaceholderEmail(email: string): boolean {
   return false;
 }
 
+/**
+ * Decode common email obfuscation patterns found on websites and bios.
+ * Handles [at], (at), [dot], (dot), [period], (period) and Unicode variants.
+ */
+function deobfuscateEmail(text: string): string {
+  return text
+    .replace(/\s*\[\s*at\s*\]\s*/gi, '@')
+    .replace(/\s*\(\s*at\s*\)\s*/gi, '@')
+    .replace(/\s*\{\s*at\s*\}\s*/gi, '@')
+    .replace(/\s*\[\s*dot\s*\]\s*/gi, '.')
+    .replace(/\s*\(\s*dot\s*\)\s*/gi, '.')
+    .replace(/\s*\[\s*period\s*\]\s*/gi, '.')
+    .replace(/\s*\(\s*period\s*\)\s*/gi, '.');
+}
+
+const BUSINESS_ALIASES = ['hello', 'contact', 'team', 'business', 'info', 'support', 'press', 'partnerships', 'collab', 'inquiries'];
+const GENERIC_PROVIDERS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'protonmail.com', 'aol.com', 'icloud.com', 'live.com', 'mail.com'];
+
 function extractEmail(html: string, text: string): string | null {
   const mailtos = (html.match(/mailto:([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/gi) ?? [])
     .map(m => m.replace(/^mailto:/i, ''));
-  const decoded = text.replace(/\s*\[\s*at\s*\]\s*/gi, '@').replace(/\s*\(\s*at\s*\)\s*/gi, '@');
+  const decoded = deobfuscateEmail(text);
   const textEmails = decoded.match(EMAIL_RE) ?? [];
   const all = [...mailtos, ...textEmails]
     .map(e => e.trim().replace(/\.$/, ''))
     .filter(e => !isPlaceholderEmail(e));
   // Prefer business-style aliases
-  const prefer = ['hello', 'contact', 'team', 'business', 'info', 'support', 'press', 'partnerships'];
-  const preferred = all.find(e => prefer.some(p => e.toLowerCase().startsWith(p + '@')));
+  const preferred = all.find(e => BUSINESS_ALIASES.some(p => e.toLowerCase().startsWith(p + '@')));
   return preferred ?? all[0] ?? null;
+}
+
+/**
+ * Extract email directly from a social media bio (plain text, not HTML).
+ * Handles obfuscated formats like "email me: name [at] domain [dot] com".
+ * Returns the first valid email found, or null.
+ */
+export function extractEmailFromBio(bioText: string): string | null {
+  if (!bioText) return null;
+  const decoded = deobfuscateEmail(bioText);
+  const emails = decoded.match(EMAIL_RE) ?? [];
+  const valid = emails
+    .map(e => e.trim().replace(/\.$/, ''))
+    .filter(e => !isPlaceholderEmail(e));
+  const preferred = valid.find(e => BUSINESS_ALIASES.some(p => e.toLowerCase().startsWith(p + '@')));
+  return preferred ?? valid[0] ?? null;
+}
+
+/**
+ * Score an email by quality. Used by scoring.ts to replace the flat 25-point
+ * email bonus with quality-aware scoring.
+ *
+ * Returns 15-27 (higher = more valuable for outreach).
+ */
+export function emailQualityScore(email: string): number {
+  if (!email) return 0;
+  const lower = email.toLowerCase();
+  const [local, domain] = lower.split('@');
+  if (!local || !domain) return 0;
+
+  let score = 20; // base score for having any email
+
+  // Custom domain vs generic provider
+  if (GENERIC_PROVIDERS.some(g => domain === g)) {
+    score = 15; // gmail/yahoo/etc — lower value
+  } else {
+    score = 22; // custom domain — higher value
+  }
+
+  // Business alias bonus
+  if (BUSINESS_ALIASES.includes(local)) {
+    score = Math.max(score, 25); // business alias = highest
+  }
+
+  return score;
 }
 
 function extractPhone(text: string): string | null {

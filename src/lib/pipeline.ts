@@ -27,22 +27,19 @@ function analyzeText(texts: (string | null | undefined)[]) {
 }
 
 /**
- * A lead is outreach-ready if it has any viable contact path:
- *   email > phone > contact form > website we can crawl later > social profile DM
+ * STRICT contact gate: a lead MUST have email or phone to be inserted.
  *
- * The original rule required a website/email/phone/form and threw away
- * every creator whose only reachable channel was their social profile.
- * That lost dozens of valid leads per refresh (real YouTubers/IG users who
- * just don't link a site in their bio). A social profile URL is a valid
- * DM destination, so we accept it — leads with email still outrank
- * profile-only leads via lead_score (email = +25 points).
+ * This is deliberately strict — website-only, contact-form-only, and
+ * profile-only leads are rejected. The pipeline enriches every candidate
+ * with a website BEFORE this check runs (Phase 1b for X, Phase 3 for
+ * secondary sources), so by the time we get here, the `contact.email`
+ * field has been populated if the website yielded an email.
  *
  * Enforced at insert — updates are unrestricted because the lead already exists.
  */
 function hasContactPath(data: DiscoveredCreator): boolean {
-  if (data.website) return true;
-  if (data.contact?.email || data.contact?.phone || data.contact?.contact_form_url) return true;
-  if (data.account?.profile_url) return true;
+  if (data.contact?.email) return true;
+  if (data.contact?.phone) return true;
   return false;
 }
 
@@ -109,12 +106,13 @@ export interface ExistingIndex {
   platformIds: Set<string>;   // `${platform}::${platform_id_lower}`
   handles: Set<string>;       // `${platform}::${handle_lower}`
   domains: Set<string>;       // domain lowered
+  emails: Set<string>;        // lowercased emails for email-based dedup
 }
 
 export async function buildExistingIndex(
-  candidates: Pick<DiscoveredCreator, 'website' | 'account'>[],
+  candidates: Pick<DiscoveredCreator, 'website' | 'account' | 'contact'>[],
 ): Promise<ExistingIndex> {
-  const index: ExistingIndex = { platformIds: new Set(), handles: new Set(), domains: new Set() };
+  const index: ExistingIndex = { platformIds: new Set(), handles: new Set(), domains: new Set(), emails: new Set() };
   if (!isSupabaseConfigured() || candidates.length === 0) return index;
 
   const platformIdPairs = new Map<Platform, string[]>();
@@ -188,6 +186,24 @@ export async function buildExistingIndex(
     } catch { /* ignore */ }
   }
 
+  // Batch query creators by email (for email-based dedup)
+  const candidateEmails = candidates
+    .map(c => c.contact?.email?.toLowerCase())
+    .filter((e): e is string => Boolean(e));
+  const uniqueEmails = [...new Set(candidateEmails)];
+  for (let i = 0; i < uniqueEmails.length; i += 200) {
+    const chunk = uniqueEmails.slice(i, i + 200);
+    try {
+      const { data } = await supabaseAdmin
+        .from('creators')
+        .select('public_email')
+        .in('public_email', chunk);
+      for (const row of data ?? []) {
+        if (row.public_email) index.emails.add(row.public_email.toLowerCase());
+      }
+    } catch { /* ignore */ }
+  }
+
   return index;
 }
 
@@ -202,6 +218,8 @@ export function isAlreadyKnown(candidate: DiscoveredCreator, index: ExistingInde
       if (index.domains.has(host)) return true;
     } catch { /* skip */ }
   }
+  // Email-based dedup — prevents inserting duplicate emails across platforms
+  if (candidate.contact?.email && index.emails.has(candidate.contact.email.toLowerCase())) return true;
   return false;
 }
 

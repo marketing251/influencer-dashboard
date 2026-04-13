@@ -1,21 +1,18 @@
 /**
  * Time-aware Refresh Leads pipeline for Vercel Pro (~300s budget).
+ * X (Twitter) is the PRIMARY discovery source — runs first with inline
+ * enrichment so email-based dedup and the strict email-or-phone filter
+ * both have data to work with before secondary sources even start.
  *
- * Phases:
- *   1. Backfill prop-firm exclusion on existing rows (so stale firms
- *      disappear from lead queries without a full rewrite).
- *   2. Parallel discovery across YouTube, X, Instagram seeds, LinkedIn seeds.
- *      Each source runs independently inside Promise.allSettled — a broken
- *      source never kills the whole refresh.
- *   3. In-memory + batched DB dedup so we never hit the network for a lead
- *      we already have.
- *   4. Concurrent fast-enrich + upsert workers, sorted so leads most likely
- *      to be contactable (with websites) run first.
- *   5. Backfill pass that enriches stored leads still missing an email,
- *      until the time budget runs out.
- *
- * Every meaningful state change emits a progress event via `onProgress`
- * so the UI can stream "Batch X of Y" updates over NDJSON.
+ * Phase structure:
+ *   0. Backfill prop-firm exclusion + placeholder email cleanup
+ *   1a. X Primary Discovery — keyword search + network expansion (60s)
+ *   1b. X Inline Enrichment — fast-enrich + bio-email on X candidates (45s)
+ *   1c. Secondary Sources — YouTube, IG seeds, LI seeds, CSE, Reddit (50s)
+ *   2. Dedup (in-memory + batch DB + email-based)
+ *   3. Enrichment + upsert of secondary candidates (60s)
+ *   4. Follow-up enrichment of stored leads missing email (30s)
+ *   5. NL niche classification (10s)
  */
 
 import { supabaseAdmin, isSupabaseConfigured } from './db';
@@ -23,9 +20,13 @@ import {
   discoverYouTubeCreators,
   type YouTubeKeywordGroup,
 } from './integrations/youtube';
-import { discoverXCreators } from './integrations/x';
+import {
+  discoverXCreators,
+  discoverXExpansion,
+  type XDiscoveryResult,
+} from './integrations/x';
 import { discoverViaWebSearch } from './integrations/web-search';
-import { fastEnrich, isPlaceholderEmail } from './integrations/fast-enrich';
+import { fastEnrich, isPlaceholderEmail, extractEmailFromBio } from './integrations/fast-enrich';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
 import { discoverAcrossPlatforms, isGoogleSearchConfigured, type CrossPlatformCandidate } from './integrations/google-search';
@@ -48,6 +49,8 @@ import { log } from './logger';
 export type RefreshPhase =
   | 'init'
   | 'backfill_exclusion'
+  | 'x_discovery'
+  | 'x_enrichment'
   | 'discovery'
   | 'dedup'
   | 'enrichment'
@@ -55,21 +58,32 @@ export type RefreshPhase =
   | 'done';
 
 export interface RefreshCounts {
-  attempted: number;       // unique candidates considered after dedup
-  discovered: number;      // total raw candidates returned from all providers
+  attempted: number;
+  discovered: number;
   inserted: number;
   duplicates: number;
-  rejected: number;        // no contact path
+  rejected: number;
   excluded_prop_firm: number;
   with_email: number;
   with_phone: number;
   with_form: number;
   errors: number;
+  // X-specific metrics
+  x_discovered: number;
+  x_expanded: number;
+  x_enriched: number;
+  x_with_email: number;
+  x_with_website: number;
+  // Enrichment metrics
+  enrichment_attempts: number;
+  enrichment_success: number;
+  hard_filtered: number;
 }
 
 export interface RefreshSources {
   youtube: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   x: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
+  x_expansion: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   instagram_web: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   linkedin_web: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   google_cse: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
@@ -92,31 +106,29 @@ export interface RefreshResult extends RefreshProgress {
   started_at: string;
   completed_at: string;
   email_rate: number;
+  enrichment_rate: number;
   stopped_reason: 'completed' | 'time_budget' | 'aborted';
 }
 
 export interface RefreshOpts {
-  /** Total wall-clock budget for the pipeline. Default 265_000 (Pro 300 − buffer). */
   timeBudgetMs?: number;
-  /** Concurrency for the fast-enrich + upsert phase. */
   enrichConcurrency?: number;
-  /** Max candidates to enrich in phase 3 (prevents runaway enrichment of 1000s). */
   maxEnrichCandidates?: number;
-  /** Callback invoked on each progress event (for NDJSON streaming). */
   onProgress?: (event: RefreshProgress) => void;
-  /** External abort signal — e.g. client disconnected. */
   signal?: AbortSignal;
 }
 
-type CandidatePacket = { creator: DiscoveredCreator; posts: DiscoveredPost[] };
+type CandidatePacket = { creator: DiscoveredCreator; posts: DiscoveredPost[]; _xEnriched?: boolean };
 
-// ─── Helper ─────────────────────────────────────────────────────────
+// ─── Helpers ────────────────────────────────────────────────────────
 
 function emptyCounts(): RefreshCounts {
   return {
     attempted: 0, discovered: 0, inserted: 0, duplicates: 0,
     rejected: 0, excluded_prop_firm: 0,
     with_email: 0, with_phone: 0, with_form: 0, errors: 0,
+    x_discovered: 0, x_expanded: 0, x_enriched: 0, x_with_email: 0, x_with_website: 0,
+    enrichment_attempts: 0, enrichment_success: 0, hard_filtered: 0,
   };
 }
 
@@ -124,6 +136,7 @@ function emptySources(): RefreshSources {
   return {
     youtube: { discovered: 0, status: 'ok' },
     x: { discovered: 0, status: 'ok' },
+    x_expansion: { discovered: 0, status: 'ok' },
     instagram_web: { discovered: 0, status: 'ok' },
     linkedin_web: { discovered: 0, status: 'ok' },
     google_cse: { discovered: 0, status: 'ok' },
@@ -131,7 +144,6 @@ function emptySources(): RefreshSources {
   };
 }
 
-/** Run async work with a concurrency limit. */
 async function pLimit<T>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<void>, shouldStop?: () => boolean) {
   let i = 0;
   const workers = Array.from({ length: Math.min(limit, Math.max(items.length, 1)) }, async () => {
@@ -167,22 +179,23 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
   const emit = (phase: RefreshPhase, message: string, extra?: Partial<RefreshProgress>) => {
     const event: RefreshProgress = {
-      ...counts,
-      phase,
-      message,
+      ...counts, phase, message,
       elapsed_ms: Date.now() - started,
       time_budget_ms: timeBudgetMs,
       remaining_ms: remaining(),
-      sources,
-      ...extra,
+      sources, ...extra,
     };
     try { onProgress?.(event); } catch { /* never let the sink break the pipeline */ }
   };
 
   emit('init', 'Starting refresh');
-  log.info('refresh-pipeline: starting', { timeBudgetMs, enrichConcurrency, maxEnrichCandidates });
+  log.info('refresh-pipeline: starting', { timeBudgetMs });
 
-  // ─── Phase 0a: prop-firm exclusion backfill (cheap, short) ────────
+  const pendingCandidates: CandidatePacket[] = [];
+  const hasX = Boolean(process.env.X_BEARER_TOKEN);
+  const hasYouTube = Boolean(process.env.YOUTUBE_API_KEY);
+
+  // ─── Phase 0: backfill exclusion + placeholder cleanup ────────────
   if (isSupabaseConfigured()) {
     emit('backfill_exclusion', 'Cleaning prop-firm exclusions');
     try {
@@ -191,80 +204,173 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     } catch (err) {
       log.warn('refresh-pipeline: exclusion backfill failed', { error: String(err) });
     }
-  }
 
-  // ─── Phase 0b: null out placeholder/template emails that slipped in
-  // (e.g. "johnappleseed@gmail.com" from Apple's docs). We only scan the
-  // top 500 most-recently-seen rows to keep this cheap. Scores are NOT
-  // recomputed here — the next enrichment pass will handle that.
-  if (isSupabaseConfigured()) {
     try {
       const { data: suspect } = await supabaseAdmin
-        .from('creators')
-        .select('id, public_email')
+        .from('creators').select('id, public_email')
         .not('public_email', 'is', null)
-        .order('last_seen_at', { ascending: false })
-        .limit(500);
-
+        .order('last_seen_at', { ascending: false }).limit(500);
       const toNull: string[] = [];
       for (const row of suspect ?? []) {
         if (row.public_email && isPlaceholderEmail(row.public_email)) toNull.push(row.id);
       }
       if (toNull.length > 0) {
-        await supabaseAdmin
-          .from('creators')
+        await supabaseAdmin.from('creators')
           .update({ public_email: null, updated_at: new Date().toISOString() })
           .in('id', toNull);
-        log.info('refresh-pipeline: nulled placeholder emails', { count: toNull.length });
-        emit('backfill_exclusion', `Removed ${toNull.length} placeholder/template emails`);
+        emit('backfill_exclusion', `Removed ${toNull.length} placeholder emails`);
       }
-    } catch (err) {
-      log.warn('refresh-pipeline: placeholder email cleanup failed', { error: String(err) });
-    }
+    } catch { /* ignore */ }
   }
 
   if (timeIsUp()) return finalize('time_budget');
 
-  // ─── Phase 1: parallel discovery ──────────────────────────────────
-  emit('discovery', 'Discovering candidates from YouTube, X, and seed lists');
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 1a: X PRIMARY DISCOVERY (budget: ~60s)
+  // X runs FIRST, solo, with the most time. This is the main discovery
+  // source — everything else is supplementary.
+  // ═══════════════════════════════════════════════════════════════════
 
-  const hasYouTube = Boolean(process.env.YOUTUBE_API_KEY);
-  const hasX = Boolean(process.env.X_BEARER_TOKEN);
+  if (hasX) {
+    emit('x_discovery', 'X Primary Discovery — searching trading keywords');
+    const xBudgetDeadline = Math.min(Date.now() + 60_000, deadline - 120_000);
+    const xSignal = timeoutSignal(xBudgetDeadline, signal);
 
-  // Use a 90s soft budget for discovery (everything in parallel anyway)
-  const discoveryDeadline = Math.min(Date.now() + 90_000, deadline - 30_000);
-  const discoverySignal = timeoutSignal(discoveryDeadline, signal);
+    let xResults: XDiscoveryResult[] = [];
+    try {
+      xResults = await discoverXCreators({
+        maxPerQuery: 100,     // full page size (was 20)
+        minFollowers: 500,    // lower threshold to catch emerging creators
+        delayMs: 1_500,
+        maxPages: 2,          // paginate if tier allows
+        signal: xSignal,
+      });
+      sources.x = { discovered: xResults.length, status: 'ok' };
+      counts.x_discovered = xResults.length;
+      counts.discovered += xResults.length;
+      emit('x_discovery', `X search returned ${xResults.length} candidates`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sources.x = { discovered: 0, status: 'error', note: msg };
+      counts.errors++;
+      log.warn('refresh-pipeline: X discovery failed', { error: msg });
+    }
 
-  const discoveryTasks: Promise<void>[] = [];
-  const pendingCandidates: CandidatePacket[] = [];
-
-  // YouTube — cycles through all keyword groups each refresh
-  if (hasYouTube) {
-    discoveryTasks.push((async () => {
+    // Network expansion: get likers + followers of top seed accounts
+    if (xResults.length > 0 && remaining() > 120_000 && !aborted()) {
+      emit('x_discovery', 'X Network Expansion — expanding from seed accounts');
       try {
-        // Highest-yield groups first — the 35-query cap picks from the top of this list.
-        // Lower-yield groups (beginner, podcast, live_stream, news_analysis, etc.) get
-        // skipped by default so the free-tier 10k/day YouTube quota is enough for
-        // multiple refreshes per day instead of just one.
+        const expanded = await discoverXExpansion({
+          seedResults: xResults,
+          maxSeedAccounts: 10,
+          minSeedFollowers: 5_000,
+          delayMs: 1_500,
+          signal: xSignal,
+        });
+        sources.x_expansion = { discovered: expanded.length, status: 'ok' };
+        counts.x_expanded = expanded.length;
+        counts.discovered += expanded.length;
+        xResults.push(...expanded);
+        emit('x_discovery', `X expansion added ${expanded.length} candidates`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        sources.x_expansion = { discovered: 0, status: 'error', note: msg };
+        log.warn('refresh-pipeline: X expansion failed', { error: msg });
+      }
+    } else {
+      sources.x_expansion = { discovered: 0, status: 'skipped', note: 'No seeds or insufficient time' };
+    }
+
+    // Count how many X candidates have a website
+    for (const r of xResults) {
+      if (r.creator.website) counts.x_with_website++;
+    }
+    pendingCandidates.push(...xResults);
+  } else {
+    sources.x = { discovered: 0, status: 'skipped', note: 'X_BEARER_TOKEN not set' };
+    sources.x_expansion = { discovered: 0, status: 'skipped' };
+  }
+
+  if (timeIsUp()) return finalize('time_budget');
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 1b: X INLINE ENRICHMENT (budget: ~45s)
+  // Enrich X candidates BEFORE dedup so email-based dedup works and
+  // the strict email-or-phone filter has data to check.
+  // ═══════════════════════════════════════════════════════════════════
+
+  const xCandidates = pendingCandidates.filter(p => p.creator.account.platform === 'x');
+  if (xCandidates.length > 0) {
+    emit('x_enrichment', `Enriching ${xCandidates.length} X candidates for email`);
+    const xEnrichDeadline = Math.min(Date.now() + 45_000, deadline - 80_000);
+
+    // Sort: candidates with websites first (they're enrichable)
+    xCandidates.sort((a, b) => (b.creator.website ? 1 : 0) - (a.creator.website ? 1 : 0));
+
+    let xEnriched = 0;
+    await pLimit(xCandidates, 10, async (packet) => {
+      if (Date.now() > xEnrichDeadline || aborted()) return;
+
+      const contact: DiscoveredCreator['contact'] = {};
+
+      // Strategy 1: extract email from X bio text directly
+      if (packet.creator.bio) {
+        const bioEmail = extractEmailFromBio(packet.creator.bio);
+        if (bioEmail) contact.email = bioEmail;
+      }
+
+      // Strategy 2: fast-enrich the linked website (root + /contact + /about + link-in-bio)
+      if (!contact.email && packet.creator.website) {
+        counts.enrichment_attempts++;
+        try {
+          const enr = await fastEnrich(packet.creator.website, { maxTotalMs: 4_000, perRequestMs: 2_500 });
+          if (enr.email) { contact.email = enr.email; counts.enrichment_success++; }
+          if (enr.phone) contact.phone = enr.phone;
+          if (enr.contact_form_url) contact.contact_form_url = enr.contact_form_url;
+        } catch { /* continue */ }
+      }
+
+      packet.creator = { ...packet.creator, contact };
+      packet._xEnriched = true;
+      xEnriched++;
+
+      if (contact.email) counts.x_with_email++;
+      counts.x_enriched++;
+
+      if (xEnriched % 10 === 0) {
+        emit('x_enrichment', `X enriched ${xEnriched}/${xCandidates.length} (${counts.x_with_email} emails)`, {
+          batch_index: xEnriched, batch_total: xCandidates.length,
+        });
+      }
+    }, () => Date.now() > xEnrichDeadline || aborted());
+
+    emit('x_enrichment', `X enrichment done — ${counts.x_with_email} emails from ${xEnriched} candidates`);
+  }
+
+  if (timeIsUp()) return finalize('time_budget');
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 1c: SECONDARY SOURCES (budget: ~50s)
+  // YouTube, Instagram seeds, LinkedIn seeds, Google CSE, Reddit
+  // run in parallel. Same logic as before, just a different deadline.
+  // ═══════════════════════════════════════════════════════════════════
+
+  emit('discovery', 'Running secondary sources');
+  const secondaryDeadline = Math.min(Date.now() + 50_000, deadline - 60_000);
+  const secondarySignal = timeoutSignal(secondaryDeadline, signal);
+  const secondaryTasks: Promise<void>[] = [];
+
+  // YouTube
+  if (hasYouTube) {
+    secondaryTasks.push((async () => {
+      try {
         const priorityGroups: YouTubeKeywordGroup[] = [
-          'forex',
-          'prop_firm',
-          'day_trading',
-          'mentor',
-          'options',
-          'crypto',
-          'smart_money',
-          'futures',
-          'stocks',
+          'forex', 'prop_firm', 'day_trading', 'mentor', 'options',
+          'crypto', 'smart_money', 'futures', 'stocks',
         ];
         const results = await discoverYouTubeCreators({
-          groups: priorityGroups,
-          maxPerQuery: 10,
-          minSubscribers: 100,      // lowered from 500 — catch emerging creators too
-          secondPage: false,        // quota-constrained; a second page doubles cost
-          maxQueries: 35,           // ~3 500 quota units per refresh
-          concurrency: 6,
-          signal: discoverySignal,
+          groups: priorityGroups, maxPerQuery: 10, minSubscribers: 100,
+          secondPage: false, maxQueries: 35, concurrency: 6, signal: secondarySignal,
         });
         sources.youtube = { discovered: results.length, status: 'ok' };
         counts.discovered += results.length;
@@ -274,186 +380,141 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
         const msg = err instanceof Error ? err.message : String(err);
         sources.youtube = { discovered: 0, status: 'error', note: msg };
         counts.errors++;
-        log.warn('refresh-pipeline: youtube failed', { error: msg });
-        emit('discovery', `YouTube failed: ${msg}`);
       }
     })());
   } else {
     sources.youtube = { discovered: 0, status: 'skipped', note: 'YOUTUBE_API_KEY not set' };
   }
 
-  // X — rate-limited, catch errors locally
-  if (hasX) {
-    discoveryTasks.push((async () => {
-      try {
-        const results = await discoverXCreators({
-          maxPerQuery: 20,
-          minFollowers: 1_000,
-          delayMs: 1_500,
-        });
-        sources.x = { discovered: results.length, status: 'ok' };
-        counts.discovered += results.length;
-        pendingCandidates.push(...results);
-        emit('discovery', `X returned ${results.length} candidates`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        sources.x = { discovered: 0, status: 'error', note: msg };
-        counts.errors++;
-        log.warn('refresh-pipeline: x failed', { error: msg });
-        emit('discovery', `X failed: ${msg}`);
-      }
-    })());
-  } else {
-    sources.x = { discovered: 0, status: 'skipped', note: 'X_BEARER_TOKEN not set' };
-  }
-
-  // Web discovery (Instagram + LinkedIn) — seeds + Brave if configured
+  // Instagram + LinkedIn web discovery
   for (const platform of ['instagram', 'linkedin'] as const) {
-    discoveryTasks.push((async () => {
+    secondaryTasks.push((async () => {
       const sourceKey = platform === 'instagram' ? 'instagram_web' : 'linkedin_web';
       try {
         const candidates = await discoverViaWebSearch({ platform });
-
-        // Verify + convert to DiscoveredCreator
         const handlePageCount = new Map<string, number>();
         for (const c of candidates) if (c.handle) handlePageCount.set(c.handle, (handlePageCount.get(c.handle) ?? 0) + 1);
-
         const seen = new Set<string>();
         const converted: CandidatePacket[] = [];
         for (const c of candidates) {
           if (!c.handle || seen.has(c.handle)) continue;
           seen.add(c.handle);
-
           const isSeed = c.sourceUrl === 'seed_data';
           if (!isSeed) {
             const v = verifyCandidate(c, null, handlePageCount.get(c.handle) ?? 1);
             if (!v.shouldStore) continue;
           }
-
           converted.push({
             creator: {
               name: c.name,
               slug: c.handle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
               website: c.websiteUrl ?? null,
-              bio: isSeed
-                ? `Known ${platform} trading influencer/educator`
-                : `Discovered via web search: ${c.sourceTitle}`,
+              bio: isSeed ? `Known ${platform} trading influencer/educator` : `Discovered via web search: ${c.sourceTitle}`,
               source_type: isSeed ? 'seed' : 'web_search',
               source_url: c.sourceUrl,
               account: {
-                platform,
-                handle: c.handle,
+                platform, handle: c.handle,
                 profile_url: c.profileUrl || `https://${platform === 'instagram' ? 'instagram.com' : 'linkedin.com/in'}/${c.handle}`,
-                followers: 0,
-                platform_id: c.handle,
-                bio: '',
-                verified: false,
+                followers: 0, platform_id: c.handle, bio: '', verified: false,
               },
             },
             posts: [],
           });
         }
-
         sources[sourceKey] = { discovered: converted.length, status: 'ok' };
         counts.discovered += converted.length;
         pendingCandidates.push(...converted);
-        emit('discovery', `${platform} web returned ${converted.length} candidates`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        sources[sourceKey] = { discovered: 0, status: 'error', note: msg };
+        sources[platform === 'instagram' ? 'instagram_web' : 'linkedin_web'] = { discovered: 0, status: 'error', note: msg };
         counts.errors++;
-        log.warn('refresh-pipeline: web-search failed', { platform, error: msg });
-        emit('discovery', `${platform} web failed: ${msg}`);
       }
     })());
   }
 
-  // ── Google CSE cross-platform discovery (covers IG/LI/X/YT/Reddit/StockTwits/TG/Discord)
+  // Google CSE
   if (isGoogleSearchConfigured()) {
-    discoveryTasks.push((async () => {
+    secondaryTasks.push((async () => {
       try {
-        const candidates = await discoverAcrossPlatforms({ concurrency: 4, timeoutMs: 8_000, signal: discoverySignal });
+        const candidates = await discoverAcrossPlatforms({ concurrency: 4, timeoutMs: 8_000, signal: secondarySignal });
         const converted = candidates.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
         sources.google_cse = { discovered: converted.length, status: 'ok' };
         counts.discovered += converted.length;
         pendingCandidates.push(...converted);
-        emit('discovery', `Google CSE returned ${converted.length} candidates across platforms`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        sources.google_cse = { discovered: 0, status: 'error', note: msg };
+        sources.google_cse = { discovered: 0, status: 'error', note: String(err) };
         counts.errors++;
-        log.warn('refresh-pipeline: google CSE failed', { error: msg });
       }
     })());
   } else {
     sources.google_cse = { discovered: 0, status: 'skipped', note: 'GOOGLE_CLOUD_API_KEY / GOOGLE_CSE_CX not set' };
   }
 
-  // ── Reddit discovery — scans r/Forex, r/Daytrading, etc. for cross-platform mentions
+  // Reddit
   if (isRedditConfigured()) {
-    discoveryTasks.push((async () => {
+    secondaryTasks.push((async () => {
       try {
         const { crossPlatformHandles } = await discoverViaReddit({
-          postsPerSub: 40,
-          timeframe: 'month',
-          minUpvotes: 20,
-          concurrency: 4,
-          signal: discoverySignal,
+          postsPerSub: 40, timeframe: 'month', minUpvotes: 20, concurrency: 4, signal: secondarySignal,
         });
         const converted = crossPlatformHandles.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
         sources.reddit = { discovered: converted.length, status: 'ok' };
         counts.discovered += converted.length;
         pendingCandidates.push(...converted);
-        emit('discovery', `Reddit returned ${converted.length} candidates`);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        sources.reddit = { discovered: 0, status: 'error', note: msg };
+        sources.reddit = { discovered: 0, status: 'error', note: String(err) };
         counts.errors++;
-        log.warn('refresh-pipeline: reddit failed', { error: msg });
       }
     })());
   } else {
     sources.reddit = { discovered: 0, status: 'skipped', note: 'REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET not set' };
   }
 
-  // Wait for all discovery sources (or discovery deadline)
   await Promise.race([
-    Promise.allSettled(discoveryTasks),
-    sleep(Math.max(0, discoveryDeadline - Date.now())),
+    Promise.allSettled(secondaryTasks),
+    sleep(Math.max(0, secondaryDeadline - Date.now())),
   ]);
 
-  emit('discovery', `Discovery phase complete — ${counts.discovered} raw candidates`);
+  emit('discovery', `All sources complete — ${counts.discovered} raw candidates (X: ${counts.x_discovered}+${counts.x_expanded})`);
 
   if (timeIsUp()) return finalize('time_budget');
 
-  // ─── Phase 2: deduplicate (in-memory + DB batch) ──────────────────
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 2: DEDUP (in-memory + DB + email-based)
+  // ═══════════════════════════════════════════════════════════════════
+
   emit('dedup', 'Deduplicating candidates');
 
-  // In-memory dedup by (platform, handle) and domain and prop-firm classification
   const seenLocal = new Set<string>();
+  const seenEmails = new Set<string>();
   const preFiltered: CandidatePacket[] = [];
+
   for (const packet of pendingCandidates) {
     const key = `${packet.creator.account.platform}::${(packet.creator.account.handle || '').toLowerCase().replace(/^@/, '')}`;
     if (seenLocal.has(key)) continue;
     seenLocal.add(key);
 
-    // Reject prop firms up front (also upsert-side will catch them)
-    const firm = classifyPropFirm({
-      name: packet.creator.name,
-      slug: packet.creator.slug,
-      website: packet.creator.website,
-      bio: packet.creator.bio,
-    });
-    if (firm.is_prop_firm) {
-      counts.excluded_prop_firm++;
-      continue;
+    // In-memory email dedup
+    const email = packet.creator.contact?.email?.toLowerCase();
+    if (email) {
+      if (seenEmails.has(email)) { counts.duplicates++; continue; }
+      seenEmails.add(email);
     }
+
+    // Prop firm filter
+    const firm = classifyPropFirm({
+      name: packet.creator.name, slug: packet.creator.slug,
+      website: packet.creator.website, bio: packet.creator.bio,
+    });
+    if (firm.is_prop_firm) { counts.excluded_prop_firm++; continue; }
 
     preFiltered.push(packet);
   }
 
-  // Batch DB dedup
-  const existing = await buildExistingIndex(preFiltered.map(p => ({ website: p.creator.website, account: p.creator.account })));
+  // Batch DB dedup (now includes email-based dedup)
+  const existing = await buildExistingIndex(preFiltered.map(p => ({
+    website: p.creator.website, account: p.creator.account, contact: p.creator.contact,
+  })));
 
   const newCandidates: CandidatePacket[] = [];
   for (const packet of preFiltered) {
@@ -469,61 +530,76 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
 
   if (timeIsUp()) return finalize('time_budget');
 
-  // ─── Phase 3: fast-enrich + upsert (concurrent, time-bounded) ─────
-  // Prioritize candidates that are most likely to have contact info:
-  //   websites > link-in-bio > bio-only seeds
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 3: ENRICHMENT + UPSERT (budget: ~60s)
+  // X candidates were already enriched in Phase 1b — skip them.
+  // Secondary candidates get enriched here.
+  // Hard filter: email OR phone required for insertion.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Sort: X-enriched candidates first (they already have contact data),
+  // then website-having candidates, then the rest
   newCandidates.sort((a, b) => {
-    const aw = a.creator.website ? 2 : 0;
-    const bw = b.creator.website ? 2 : 0;
-    return bw - aw;
+    const aScore = (a._xEnriched ? 4 : 0) + (a.creator.website ? 2 : 0) + (a.creator.contact?.email ? 1 : 0);
+    const bScore = (b._xEnriched ? 4 : 0) + (b.creator.website ? 2 : 0) + (b.creator.contact?.email ? 1 : 0);
+    return bScore - aScore;
   });
 
   const enrichTarget = newCandidates.slice(0, maxEnrichCandidates);
   let processed = 0;
   const total = enrichTarget.length;
 
-  emit('enrichment', `Enriching ${total} candidates`, { batch_index: 0, batch_total: total });
+  emit('enrichment', `Processing ${total} candidates`, { batch_index: 0, batch_total: total });
 
-  // Reserve ~40s at the end for the follow-up phase
   const enrichmentDeadline = Math.max(Date.now() + 10_000, deadline - 40_000);
-
   const useKnowledgeGraph = isKnowledgeGraphConfigured();
 
   await pLimit(enrichTarget, enrichConcurrency, async (packet) => {
     if (Date.now() > enrichmentDeadline || aborted()) return;
 
-    // Knowledge Graph fallback: if the candidate has no website and looks like
-    // a real person's name, try to recover a canonical URL + bio.
     let mutableCreator = packet.creator;
-    if (useKnowledgeGraph && !mutableCreator.website && looksLikeProperName(mutableCreator.name)) {
-      try {
-        const kg = await knowledgeGraphBest(mutableCreator.name, { timeoutMs: 4_000 });
-        if (kg) {
-          const recoveredWebsite = kg.url && !/wikipedia\.org|facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com/i.test(kg.url)
-            ? kg.url
-            : null;
-          const recoveredBio = kg.detailedDescription || kg.description;
-          mutableCreator = {
-            ...mutableCreator,
-            website: mutableCreator.website || recoveredWebsite,
-            bio: mutableCreator.bio || recoveredBio || null,
-          };
+
+    // Skip enrichment for X candidates that were already enriched in Phase 1b
+    if (!packet._xEnriched) {
+      // KG fallback for no-website proper names
+      if (useKnowledgeGraph && !mutableCreator.website && looksLikeProperName(mutableCreator.name)) {
+        try {
+          const kg = await knowledgeGraphBest(mutableCreator.name, { timeoutMs: 4_000 });
+          if (kg) {
+            const recoveredWebsite = kg.url && !/wikipedia\.org|facebook\.com|twitter\.com|x\.com|instagram\.com|linkedin\.com/i.test(kg.url)
+              ? kg.url : null;
+            mutableCreator = {
+              ...mutableCreator,
+              website: mutableCreator.website || recoveredWebsite,
+              bio: mutableCreator.bio || kg.detailedDescription || kg.description || null,
+            };
+          }
+        } catch { /* continue */ }
+      }
+
+      // Bio email extraction
+      if (!mutableCreator.contact?.email && mutableCreator.bio) {
+        const bioEmail = extractEmailFromBio(mutableCreator.bio);
+        if (bioEmail) {
+          mutableCreator = { ...mutableCreator, contact: { ...mutableCreator.contact, email: bioEmail } };
         }
-      } catch { /* continue without KG data */ }
+      }
+
+      // Fast-enrich website
+      if (!mutableCreator.contact?.email && mutableCreator.website) {
+        counts.enrichment_attempts++;
+        try {
+          const enr = await fastEnrich(mutableCreator.website, { maxTotalMs: 5_500, perRequestMs: 3_000 });
+          const contact = { ...mutableCreator.contact };
+          if (enr.email) { contact.email = enr.email; counts.enrichment_success++; }
+          if (enr.phone) contact.phone = enr.phone;
+          if (enr.contact_form_url) contact.contact_form_url = enr.contact_form_url;
+          mutableCreator = { ...mutableCreator, contact };
+        } catch { /* continue */ }
+      }
     }
 
-    // Fast-enrich if we have a website
-    const contact: { email?: string | null; phone?: string | null; contact_form_url?: string | null } = {};
-    if (mutableCreator.website) {
-      try {
-        const enr = await fastEnrich(mutableCreator.website, { maxTotalMs: 5_500, perRequestMs: 3_000 });
-        contact.email = enr.email;
-        contact.phone = enr.phone;
-        contact.contact_form_url = enr.contact_form_url;
-      } catch { /* continue without enrichment */ }
-    }
-
-    const creator: DiscoveredCreator = { ...mutableCreator, contact };
+    const creator: DiscoveredCreator = mutableCreator;
 
     try {
       const result = await upsertCreator(creator, packet.posts);
@@ -538,33 +614,32 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
         if (result.had_phone) counts.with_phone++;
         if (result.had_form) counts.with_form++;
       } else if (result.action === 'skipped') {
-        if (result.error === 'no_contact_path') counts.rejected++;
+        if (result.error === 'no_contact_path') { counts.rejected++; counts.hard_filtered++; }
         else if (result.error === 'is_prop_firm') counts.excluded_prop_firm++;
         else counts.errors++;
       }
     } catch (err) {
       counts.errors++;
-      log.warn('refresh-pipeline: upsert failed', { name: packet.creator.name, error: String(err) });
+      log.warn('refresh-pipeline: upsert failed', { name: creator.name, error: String(err) });
     }
 
     processed++;
-    // Throttle progress events to every 5 candidates + edge cases
-    if (processed % 5 === 0 || processed === total) {
-      emit('enrichment', `Enriched ${processed}/${total} (inserted ${counts.inserted}, email ${counts.with_email})`, {
-        batch_index: processed,
-        batch_total: total,
+    if (processed % 10 === 0 || processed === total) {
+      emit('enrichment', `Processed ${processed}/${total} (inserted ${counts.inserted}, email ${counts.with_email})`, {
+        batch_index: processed, batch_total: total,
       });
     }
   }, () => Date.now() > enrichmentDeadline || aborted());
 
   if (timeIsUp()) return finalize('time_budget');
 
-  // ─── Phase 4: follow-up enrichment of stored leads missing email ──
-  if (isSupabaseConfigured() && remaining() > 10_000) {
-    emit('followup_enrichment', 'Enriching existing leads missing email');
+  // ═══════════════════════════════════════════════════════════════════
+  // PHASE 4: FOLLOW-UP ENRICHMENT (budget: ~30s)
+  // Re-enrich stored leads that have a website but no email yet.
+  // ═══════════════════════════════════════════════════════════════════
 
-    // How many rows can we realistically enrich in the time left?
-    // Assume ~6s per row at concurrency `enrichConcurrency`.
+  if (isSupabaseConfigured() && remaining() > 10_000) {
+    emit('followup_enrichment', 'Re-enriching stored leads missing email');
     const maxRows = Math.max(0, Math.floor((remaining() - 10_000) / (6000 / enrichConcurrency)));
     const limitFetch = Math.min(60, Math.max(0, maxRows));
 
@@ -584,16 +659,16 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
           await pLimit(leads, Math.min(enrichConcurrency, leads.length), async (lead) => {
             if (remaining() < 5_000 || aborted()) return;
             if (!lead.website) return;
+            counts.enrichment_attempts++;
             try {
               const enr = await fastEnrich(lead.website, { maxTotalMs: 5_000, perRequestMs: 2_800 });
               const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
               let changed = false;
-              if (enr.email && !lead.public_email) { updates.public_email = enr.email; counts.with_email++; changed = true; }
+              if (enr.email && !lead.public_email) { updates.public_email = enr.email; counts.with_email++; counts.enrichment_success++; changed = true; }
               if (enr.phone && !lead.public_phone) { updates.public_phone = enr.phone; counts.with_phone++; changed = true; }
               if (enr.contact_form_url && !lead.contact_form_url) { updates.contact_form_url = enr.contact_form_url; counts.with_form++; changed = true; }
               if (changed) {
                 await supabaseAdmin.from('creators').update(updates).eq('id', lead.id);
-                // Refresh scores
                 const { data: full } = await supabaseAdmin.from('creators').select('*').eq('id', lead.id).single();
                 const { data: accs } = await supabaseAdmin.from('creator_accounts').select('followers, platform, verified').eq('creator_id', lead.id);
                 if (full) {
@@ -603,15 +678,11 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
                   }).eq('id', lead.id);
                 }
               }
-            } catch (err) {
-              counts.errors++;
-              log.debug('refresh-pipeline: follow-up enrich failed', { id: lead.id, error: String(err) });
-            }
+            } catch { counts.errors++; }
             followupProcessed++;
             if (followupProcessed % 5 === 0) {
               emit('followup_enrichment', `Re-enriched ${followupProcessed}/${leads.length}`, {
-                batch_index: followupProcessed,
-                batch_total: leads.length,
+                batch_index: followupProcessed, batch_total: leads.length,
               });
             }
           }, () => remaining() < 5_000 || aborted());
@@ -622,65 +693,50 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     }
   }
 
-  // ─── Phase 5: niche classification via Natural Language API (cheap, bounded) ─
-  // Quota-conscious: only classify leads that are missing a niche AND have
-  // enough bio text to actually produce a result. Capped at 20 per refresh so
-  // we stay comfortably inside the 5,000-unit free monthly quota.
+  // ─── Phase 5: NL niche classification (bounded) ───────────────────
   if (isSupabaseConfigured() && isNaturalLanguageConfigured() && remaining() > 8_000) {
     emit('followup_enrichment', 'Classifying niches from bios');
     try {
       const { data: unclassified } = await supabaseAdmin
-        .from('creators')
-        .select('id, name')
-        .is('niche', null)
-        .neq('excluded_from_leads', true)
-        .order('lead_score', { ascending: false })
-        .limit(20);
+        .from('creators').select('id, name')
+        .is('niche', null).neq('excluded_from_leads', true)
+        .order('lead_score', { ascending: false }).limit(20);
 
-      // Bios live on creator_accounts, not creators — batch-fetch them
       if (unclassified && unclassified.length > 0) {
         const ids = unclassified.map(u => u.id);
         const { data: accountBios } = await supabaseAdmin
-          .from('creator_accounts')
-          .select('creator_id, bio')
-          .in('creator_id', ids);
-
+          .from('creator_accounts').select('creator_id, bio').in('creator_id', ids);
         const bioByCreator = new Map<string, string>();
         for (const row of accountBios ?? []) {
           if (row.bio && !bioByCreator.has(row.creator_id)) bioByCreator.set(row.creator_id, row.bio);
         }
-
         let classified = 0;
         await pLimit(unclassified, 4, async (row) => {
           if (remaining() < 4_000 || aborted()) return;
           const bio = bioByCreator.get(row.id);
-          if (!bio || bio.length < 120) return; // skip short bios (<20 words ~ 120 chars)
+          if (!bio || bio.length < 120) return;
           try {
             const niche = await classifyNicheWithNL(bio, { timeoutMs: 4_000 });
             if (niche) {
               await supabaseAdmin.from('creators').update({ niche, updated_at: new Date().toISOString() }).eq('id', row.id);
               classified++;
             }
-          } catch (err) {
-            log.debug('refresh-pipeline: NL classify failed', { id: row.id, error: String(err) });
-          }
+          } catch { /* ignore */ }
         }, () => remaining() < 4_000 || aborted());
         if (classified > 0) emit('followup_enrichment', `Classified ${classified} niches via NL API`);
       }
-    } catch (err) {
-      log.warn('refresh-pipeline: niche classification failed', { error: String(err) });
-    }
+    } catch { /* ignore */ }
   }
 
   return finalize(aborted() ? 'aborted' : timeIsUp() ? 'time_budget' : 'completed');
 
-  // ─── finalize helper ──────────────────────────────────────────────
+  // ─── finalize ─────────────────────────────────────────────────────
   function finalize(reason: RefreshResult['stopped_reason']): RefreshResult {
     const completedIso = new Date().toISOString();
     const emailRate = counts.inserted > 0 ? counts.with_email / counts.inserted : 0;
+    const enrichRate = counts.enrichment_attempts > 0 ? counts.enrichment_success / counts.enrichment_attempts : 0;
     const result: RefreshResult = {
-      ...counts,
-      phase: 'done',
+      ...counts, phase: 'done',
       message: reason === 'completed'
         ? `Done — ${counts.inserted} new leads (${Math.round(emailRate * 100)}% with email)`
         : `Stopped (${reason}) — ${counts.inserted} new leads (${Math.round(emailRate * 100)}% with email)`,
@@ -691,14 +747,15 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       started_at: startedIso,
       completed_at: completedIso,
       email_rate: Math.round(emailRate * 100) / 100,
+      enrichment_rate: Math.round(enrichRate * 100) / 100,
       stopped_reason: reason,
     };
     emit('done', result.message);
     log.info('refresh-pipeline: done', {
-      reason,
-      inserted: counts.inserted,
-      duplicates: counts.duplicates,
-      with_email: counts.with_email,
+      reason, inserted: counts.inserted, duplicates: counts.duplicates,
+      with_email: counts.with_email, x_discovered: counts.x_discovered,
+      x_with_email: counts.x_with_email, hard_filtered: counts.hard_filtered,
+      enrichment_rate: result.enrichment_rate,
       elapsed_ms: result.elapsed_ms,
     });
     return result;
@@ -711,12 +768,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 }
 
-/**
- * Convert a cross-platform CSE / Reddit candidate into the `CandidatePacket`
- * shape the refresh pipeline feeds into `upsertCreator`. Drops platforms we
- * don't track in the DB (stocktwits, telegram, discord) — those would need
- * schema changes to store.
- */
 function crossPlatformToPacket(c: CrossPlatformCandidate): CandidatePacket | null {
   const dbPlatforms: Platform[] = ['instagram', 'linkedin', 'x', 'youtube'];
   if (!dbPlatforms.includes(c.platform as Platform)) return null;
@@ -730,24 +781,14 @@ function crossPlatformToPacket(c: CrossPlatformCandidate): CandidatePacket | nul
       source_type: c.sourceTitle.startsWith('r/') ? 'reddit' : 'google_cse',
       source_url: c.sourceUrl,
       account: {
-        platform,
-        handle: c.handle,
-        profile_url: c.profileUrl,
-        followers: 0,
-        platform_id: c.handle,
-        bio: '',
-        verified: false,
+        platform, handle: c.handle, profile_url: c.profileUrl,
+        followers: 0, platform_id: c.handle, bio: '', verified: false,
       },
     },
     posts: [],
   };
 }
 
-/**
- * Heuristic: does `name` look like a real person's name worth looking up
- * in Google Knowledge Graph? We only call KG for 2-4 capitalized-word names
- * to avoid burning quota on handles like "forextrader123" or brand names.
- */
 function looksLikeProperName(name: string): boolean {
   if (!name) return false;
   const clean = name.trim();
@@ -757,14 +798,12 @@ function looksLikeProperName(name: string): boolean {
   return words.every(w => /^[A-Z][a-zA-Z'.-]{1,}$/.test(w));
 }
 
-/** Build an AbortSignal that fires when the deadline passes OR the parent aborts. */
 function timeoutSignal(deadline: number, parent?: AbortSignal): AbortSignal {
   const controller = new AbortController();
   if (parent?.aborted) controller.abort();
   parent?.addEventListener('abort', () => controller.abort(), { once: true });
   const ms = Math.max(0, deadline - Date.now());
   const timer = setTimeout(() => controller.abort(), ms);
-  // Don't keep the event loop alive just for this timer
   if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
     (timer as unknown as { unref: () => void }).unref();
   }
