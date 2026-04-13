@@ -71,47 +71,83 @@ interface XUsersResponse {
   meta?: { next_token?: string; result_count?: number };
 }
 
-// ─── Search queries — creator-intent focused ────────────────────────
+// ─── Tiered search queries — creator-intent, weighted by value ──────
 //
-// 70% creator-intent (find individual educators/mentors/affiliates)
-// 30% transformed prop-related (find people REVIEWING/DISCUSSING firms)
+// Distribution: Tier 1 (40%) → Tier 2 (30%) → Tier 3 (20%) → Tier 4 (10%)
 //
-// Key principle: every query includes language that signals an individual
-// creator (review, tutorial, journey, mentor, course, community, my, I)
-// rather than a company (challenge, payout, platform, capital, funding).
+// Tier 1: Monetized creators (courses, mentors, communities, signals)
+//         These have the highest email yield because they SELL something
+//         and need a website with contact info.
+// Tier 2: Authority creators (live trading, results, funded journeys)
+//         Public proof-of-results attracts followers; these creators
+//         often have link-in-bio or personal sites.
+// Tier 3: Strategy & education creators (tutorials, how-tos)
+//         Educational content creators with courses or Skool/Whop communities.
+// Tier 4: Prop-adjacent discovery (review/walkthrough content)
+//         Finds individuals discussing prop firms, not the firms themselves.
 
-const CREATOR_INTENT_QUERIES = [
-  // ── Mentors & educators ──
-  '"trading mentor" (course OR coaching OR join) -is:retweet lang:en',
+const TIER_1_MONETIZED = [
+  // ── Courses & mentorships ──
+  '"trading course" (enroll OR review OR join) -is:retweet lang:en',
+  '"forex course" OR "forex mentorship" (learn OR join) -is:retweet lang:en',
+  '"crypto course" OR "crypto mentorship" (enroll OR beginner) -is:retweet lang:en',
+  '"trading mentor" (coaching OR session OR DM) -is:retweet lang:en',
   '"forex mentor" OR "forex coach" (strategy OR beginner) -is:retweet lang:en',
-  '"trading teacher" OR "forex educator" (tutorial OR lesson) -is:retweet lang:en',
-  // ── Communities & signals ──
-  '"trading community" (discord OR telegram OR free) -is:retweet lang:en',
-  '"trading signals" (proof OR results OR join) -is:retweet lang:en',
-  '"trading discord" (free OR join OR members) -is:retweet lang:en',
-  // ── Courses & content ──
-  '"trading course" (review OR honest OR worth) -is:retweet lang:en',
-  '"my trading journey" (forex OR futures OR crypto) -is:retweet lang:en',
+  '"trading academy" OR "trading bootcamp" (join OR enroll) -is:retweet lang:en',
+  '"trading program" (results OR testimonials) -is:retweet lang:en',
+  // ── Communities & signals (high-intent: these creators monetize) ──
+  '"trading discord" (free OR VIP OR join) -is:retweet lang:en',
+  '"forex signals" (proof OR results OR performance) -is:retweet lang:en',
+  '"crypto signals" (VIP OR premium OR join) -is:retweet lang:en',
+  '"trading community" (discord OR telegram OR members) -is:retweet lang:en',
+  '"premium signals" (forex OR crypto OR trading) -is:retweet lang:en',
+  // ── Lead magnet creators ──
+  '"free trading course" OR "free forex signals" -is:retweet lang:en',
+  '"trading giveaway" OR "funded account giveaway" -is:retweet lang:en',
+];
+
+const TIER_2_AUTHORITY = [
+  // ── Live proof & results ──
   '"live trading" (stream OR session OR room) -is:retweet lang:en',
-  // ── Strategy creators ──
-  '"price action" (tutorial OR strategy OR explained) -is:retweet lang:en',
-  '"smart money concepts" (tutorial OR explained OR ICT) -is:retweet lang:en',
-  '"trading psychology" (mindset OR discipline OR coach) -is:retweet lang:en',
-  // ── Niche creators ──
+  '"trading results" (proof OR screenshot OR payout) -is:retweet lang:en',
+  '"trade recap" (forex OR futures OR crypto) -is:retweet lang:en',
+  '"winning trades" (results OR profit) -is:retweet lang:en',
+  '"funded trader journey" (results OR payout OR proof) -is:retweet lang:en',
+  '"trading account growth" (proof OR results) -is:retweet lang:en',
+  // ── Bio-keyword-rich creators ──
   '"day trader" (lifestyle OR results OR routine) -is:retweet lang:en',
   '"crypto trader" (analysis OR education OR signals) -is:retweet lang:en',
-  '"options trader" (income OR strategy OR tutorial) -is:retweet lang:en',
-  '"forex scalper" OR "scalping strategy" (tutorial OR explained) -is:retweet lang:en',
+  '"forex trader" (results OR journey OR lifestyle) -is:retweet lang:en',
 ];
 
-const PROP_REVIEW_QUERIES = [
-  // ── People REVIEWING/DISCUSSING prop firms (not the firms themselves) ──
+const TIER_3_STRATEGY = [
+  // ── Strategy tutorials ──
+  '"price action" (tutorial OR strategy OR explained) -is:retweet lang:en',
+  '"smart money concepts" (tutorial OR explained OR ICT) -is:retweet lang:en',
+  '"scalping strategy" (tutorial OR explained OR forex) -is:retweet lang:en',
+  '"day trading strategy" (beginner OR tutorial) -is:retweet lang:en',
+  '"trading for beginners" (course OR tutorial OR guide) -is:retweet lang:en',
+  '"trading psychology" (mindset OR discipline OR coach) -is:retweet lang:en',
+];
+
+const TIER_4_PROP_ADJACENT = [
+  // ── People REVIEWING/DISCUSSING prop firms ──
+  '"prop firm challenge" (passed OR "how to pass" OR tips) -is:retweet lang:en',
   '"prop firm" (review OR experience OR honest) -is:retweet lang:en',
-  '"prop firm challenge" (passed OR "how to pass" OR strategy) -is:retweet lang:en',
-  '"funded trader" (journey OR "my results" OR proof) -is:retweet lang:en',
+  '"funded account" (strategy OR journey OR walkthrough) -is:retweet lang:en',
 ];
 
-const TRADING_QUERIES = [...CREATOR_INTENT_QUERIES, ...PROP_REVIEW_QUERIES];
+// Combined in tier order so the maxQueries cap in discoverXCreators
+// naturally gives Tier 1 the most queries and Tier 4 the fewest.
+const TRADING_QUERIES = [
+  ...TIER_1_MONETIZED,   // 14 queries (40%)
+  ...TIER_2_AUTHORITY,   //  9 queries (26%)
+  ...TIER_3_STRATEGY,    //  6 queries (17%)
+  ...TIER_4_PROP_ADJACENT, // 3 queries (9%)
+  // Remaining ~8% is buffer consumed by AI/modern trader queries:
+  '"ai trading" OR "trading bot" (results OR review) -is:retweet lang:en',
+  '"algorithmic trading" (strategy OR backtest OR results) -is:retweet lang:en',
+];
 
 // ─── Rate-limit-aware API helpers ───────────────────────────────────
 

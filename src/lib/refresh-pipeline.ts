@@ -364,10 +364,19 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   if (hasYouTube) {
     secondaryTasks.push((async () => {
       try {
+        // Priority order matches the tier system: Tier 1 → Tier 2 → Tier 3 → Tier 4.
+        // The maxQueries: 35 cap naturally gives Tier 1 the most queries.
         const priorityGroups: YouTubeKeywordGroup[] = [
-          'forex_educator', 'trading_mentor', 'day_trading', 'prop_review',
-          'smart_money', 'options_creator', 'crypto_creator', 'stocks_creator',
-          'community', 'psychology',
+          // Tier 1 (monetized creators — highest email yield)
+          'forex_mentor', 'trading_mentor', 'crypto_mentor', 'community_signals', 'lead_magnet',
+          // Tier 2 (authority — results + proof)
+          'live_trading', 'results_proof', 'trader_lifestyle',
+          // Tier 3 (strategy & education)
+          'price_action', 'strategy_education', 'options_strategy',
+          // Tier 4 (prop-adjacent)
+          'prop_review',
+          // Bonus
+          'ai_trading',
         ];
         const results = await discoverYouTubeCreators({
           groups: priorityGroups, maxPerQuery: 10, minSubscribers: 100,

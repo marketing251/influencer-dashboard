@@ -138,45 +138,49 @@ export async function googleSearchMany(
  * on the target social site.
  */
 /**
- * Creator-intent queries for per-platform discovery.
- * Every query is designed to find INDIVIDUAL CREATORS (mentors, educators,
- * content creators) — NOT companies, brokerages, or prop firms.
+ * Tiered creator-intent queries for per-platform discovery.
+ * Ordered Tier 1 → Tier 4 so the query cap naturally prioritizes
+ * monetized creators (highest email yield) over lower tiers.
  */
 export const TRADING_QUERIES = {
   instagram: [
-    // ── Creator-intent (individuals who teach/mentor) ──
-    'forex trading mentor',
+    // Tier 1: Monetized creators
+    'forex course mentor',
+    'trading course mentor',
+    'crypto course mentor',
     'trading coach educator',
-    'crypto trader educator',
-    'day trading mentor',
-    'trading signals community',
-    'trading course review',
-    'options trading educator',
-    'trading psychology coach',
-    'price action trader tutorial',
-    'smart money concepts educator',
-    'trading discord community',
-    'forex scalper strategy tutorial',
-    'swing trader mentor',
-    'trading lifestyle vlog',
-    // ── Prop review (people reviewing, not firms) ──
+    'trading mentorship program',
+    'forex signals community',
+    'trading discord VIP',
+    'premium trading signals',
+    // Tier 2: Authority
+    'live trading results',
+    'day trading lifestyle',
+    'funded trader journey',
+    'trading results proof',
+    // Tier 3: Education
+    'trading tutorial strategy',
+    'price action educator',
+    'smart money concepts',
+    // Tier 4: Prop-adjacent
     'prop firm review experience',
-    'funded trader journey results',
   ],
   linkedin: [
-    // ── Individual educators and founders ──
-    'forex trading educator',
+    // Tier 1: Monetized creators
     'trading mentor coach',
+    'forex trading educator',
     'trading course creator',
-    'day trading educator',
-    'options trading educator',
-    'trading community founder',
     'crypto trading mentor',
+    'trading community founder',
+    'trading academy founder',
+    // Tier 2: Authority
+    'day trading educator',
     'trading coach entrepreneur',
+    'funded trader results',
+    // Tier 3: Education
     'financial educator trading',
     'trading book author',
-    // ── Prop review (individuals) ──
-    'funded trader results journey',
+    // Tier 4: Prop-adjacent
     'prop firm experience review',
   ],
 } as const;
@@ -188,26 +192,30 @@ export const TRADING_QUERIES = {
  * classify each result by its hostname.
  */
 /**
- * Cross-platform queries — find creators across all sites in the CSE engine.
- * Creator-intent focused: every query signals an individual, not a company.
+ * Cross-platform queries — tiered, Tier 1 first.
+ * These search across all sites in the CSE engine (IG, LI, X, YT, Reddit, etc.)
  */
 export const CROSS_PLATFORM_QUERIES = [
-  'forex trading mentor coach',
-  'day trading educator tutorial',
-  'trading course review honest',
-  'crypto trading mentor signals',
-  'options trading educator tutorial',
-  'trading community discord free',
-  'smart money concepts tutorial',
-  'trading psychology coach mindset',
+  // Tier 1: Monetized creators (50% of cross-platform budget)
+  'trading course mentor enroll',
+  'forex mentor coaching session',
+  'trading discord VIP signals',
+  'crypto mentor course join',
+  'trading community premium signals',
+  'trading academy mentorship program',
+  'free trading course signals',
+  'trading bootcamp course review',
+  // Tier 2: Authority
+  'live trading session results',
+  'funded trader journey proof',
+  'trading results proof payout',
+  // Tier 3: Education
   'price action strategy tutorial',
-  'funded trader journey experience',
-  'prop firm review honest',
-  'trading mentor coaching session',
-  'scalping strategy tutorial explained',
-  'swing trading mentor course',
-  'trading signals results proof',
-  'live trading stream session',
+  'smart money concepts explained',
+  'trading psychology discipline coach',
+  // Tier 4: Prop-adjacent
+  'prop firm review honest experience',
+  'how to pass prop firm challenge',
 ];
 
 // ─── Multi-platform discovery ───────────────────────────────────────

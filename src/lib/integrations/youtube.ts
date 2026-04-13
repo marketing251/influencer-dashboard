@@ -31,99 +31,101 @@ export interface YouTubeDiscoveryResult { creator: DiscoveredCreator; posts: Dis
 
 // ─── Keyword groups (each refresh can select a subset) ──────────────
 
-// ─── Creator-intent keyword groups ──────────────────────────────────
+// ─── Tiered creator-intent keyword groups ───────────────────────────
 //
-// Every query is crafted to find INDIVIDUAL CREATORS (mentors, educators,
-// affiliates, community owners) — NOT companies, brokerages, or prop firms.
+// Tier 1 (40%): Monetized creators — courses, mentors, communities, signals
+// Tier 2 (30%): Authority creators — live trading, results, journeys
+// Tier 3 (20%): Strategy & education — tutorials, how-tos
+// Tier 4 (10%): Prop-adjacent — reviews, walkthroughs
 //
-// Signals that indicate an individual creator:
-//   tutorial, explained, for beginners, my journey, course review,
-//   mentor, coach, community, discord, live stream, lifestyle, results
-//
-// Signals that indicate a company (AVOIDED in these queries):
-//   challenge, payout, funding, capital, platform, comparison, software
+// The refresh pipeline's priorityGroups list controls which groups run
+// first when the YouTube quota cap (maxQueries: 35) limits us.
 
 export const YOUTUBE_KEYWORD_GROUPS = {
-  forex_educator: [
-    'forex trading tutorial for beginners',
-    'forex strategy explained step by step',
-    'forex mentor coaching session',
-    'forex scalping strategy tutorial',
-    'forex trader lifestyle vlog',
-  ],
-  prop_review: [
-    'prop firm review honest experience',
-    'how to pass prop firm challenge tutorial',
-    'funded trader journey my results',
-    'prop firm strategy for beginners',
-  ],
-  day_trading: [
-    'day trading tutorial for beginners',
-    'day trader morning routine live',
-    'day trading strategy explained',
-    'scalping strategy tutorial live',
-  ],
-  smart_money: [
-    'smart money concepts tutorial explained',
-    'ICT trading strategy for beginners',
-    'order block strategy tutorial',
-    'liquidity sweep explained tutorial',
+  // ══ TIER 1: MONETIZED CREATORS (highest email yield) ══
+  forex_mentor: [
+    'forex course enroll join mentor',
+    'forex mentorship coaching session',
+    'forex mentor strategy for beginners',
+    'forex coach trading course review',
   ],
   trading_mentor: [
-    'trading mentor coaching session',
-    'best trading course review honest',
-    'trading coach strategies explained',
-    'trading community discord free',
-    'trading bootcamp course review',
+    'trading course review honest worth it',
+    'trading mentor coaching session join',
+    'trading academy course enrollment',
+    'trading bootcamp program review',
+    'trading mentorship results testimonials',
   ],
-  options_creator: [
-    'options trading for beginners tutorial',
-    'options strategy explained wheel',
-    'options trader income results',
-    'zero dte options strategy tutorial',
-  ],
-  crypto_creator: [
-    'crypto trading tutorial for beginners',
-    'bitcoin analysis explained today',
+  crypto_mentor: [
+    'crypto course mentorship join',
     'crypto mentor signals community',
-    'altcoin trading strategy tutorial',
+    'crypto coaching program beginner',
   ],
-  stocks_creator: [
-    'stock trading for beginners tutorial',
-    'swing trading strategy explained',
-    'penny stock trader results journey',
-    'stock market mentor coaching',
+  community_signals: [
+    'trading discord free VIP join',
+    'forex signals proof results performance',
+    'crypto signals premium VIP join',
+    'trading community discord telegram',
+    'premium trading signals results',
   ],
-  psychology: [
-    'trading psychology mindset tips',
-    'how to be profitable trader discipline',
-    'trading journal strategy explained',
-    'trader mindset coaching session',
+  lead_magnet: [
+    'free trading course forex signals',
+    'trading giveaway funded account',
+    'free forex education course join',
   ],
-  community: [
-    'trading discord community free join',
-    'trading signals telegram results',
-    'trading room live session free',
-  ],
-  beginner: [
-    'learn trading from scratch tutorial',
-    'trading for beginners complete guide',
-    'how to start trading forex tutorial',
-  ],
-  live_stream: [
+
+  // ══ TIER 2: AUTHORITY CREATORS (results + proof) ══
+  live_trading: [
     'live trading stream session today',
     'market open live trading room',
-    'live forex trading session',
+    'live forex trading session results',
+    'live day trading stream',
   ],
-  technical_analysis: [
-    'price action trading tutorial',
-    'chart patterns explained for beginners',
-    'fibonacci trading strategy tutorial',
+  results_proof: [
+    'trading results proof payout screenshot',
+    'funded trader journey results payout',
+    'trade recap forex futures profit',
+    'winning trades results forex',
+    'trading account growth proof',
   ],
-  futures_creator: [
-    'futures trading tutorial for beginners',
-    'NQ ES scalping strategy explained',
-    'micro futures trader live session',
+  trader_lifestyle: [
+    'day trader lifestyle morning routine',
+    'forex trader lifestyle results',
+    'crypto trader journey gains',
+  ],
+
+  // ══ TIER 3: STRATEGY & EDUCATION ══
+  price_action: [
+    'price action trading tutorial explained',
+    'smart money concepts ICT tutorial',
+    'order block strategy tutorial explained',
+    'scalping strategy tutorial forex',
+  ],
+  strategy_education: [
+    'day trading strategy for beginners',
+    'trading for beginners complete guide',
+    'how to trade forex tutorial beginner',
+    'trading psychology mindset discipline',
+  ],
+  options_strategy: [
+    'options trading for beginners tutorial',
+    'options strategy explained wheel income',
+    'zero dte options strategy tutorial',
+  ],
+
+  // ══ TIER 4: PROP-ADJACENT ══
+  prop_review: [
+    'prop firm review honest experience',
+    'how to pass prop firm challenge tips',
+    'funded trader journey walkthrough',
+    'prop firm challenge strategy tutorial',
+  ],
+
+  // ══ BONUS: AI / MODERN TRADERS ══
+  ai_trading: [
+    'ai trading bot strategy results',
+    'algorithmic trading tutorial backtest',
+    'automated trading strategy review',
   ],
 } as const;
 
