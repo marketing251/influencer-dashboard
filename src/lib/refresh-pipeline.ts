@@ -36,6 +36,7 @@ import {
 } from './keyword-analytics';
 import { discoverViaWebSearch } from './integrations/web-search';
 import { fastEnrich, isPlaceholderEmail, extractEmailFromBio } from './integrations/fast-enrich';
+import { extractLinkInBioUrl } from './social-links';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
 import { discoverAcrossPlatforms, isGoogleSearchConfigured, type CrossPlatformCandidate } from './integrations/google-search';
@@ -391,11 +392,27 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
         if (bioEmail) contact.email = bioEmail;
       }
 
-      // Strategy 2: fast-enrich the linked website
-      if (!contact.email && packet.creator.website) {
+      // Strategy 1.5: if the creator doesn't have a website field but their
+      // bio mentions a linktree/beacons/stan/etc. URL, promote that to the
+      // website so fast-enrich can scrape it. Many X creators only list a
+      // link-in-bio URL inline in their bio text. The link_in_bio_url DB
+      // field gets populated automatically during upsert via bio signal
+      // extraction — we just need to set `website` so enrichment runs.
+      let enrichTarget = packet.creator.website;
+      if (!enrichTarget && packet.creator.bio) {
+        const bioLib = extractLinkInBioUrl(packet.creator.bio);
+        if (bioLib) {
+          enrichTarget = bioLib;
+          packet.creator = { ...packet.creator, website: bioLib };
+          counts.x_with_website++;
+        }
+      }
+
+      // Strategy 2: fast-enrich the linked website (or bio-extracted linktree)
+      if (!contact.email && enrichTarget) {
         counts.enrichment_attempts++;
         try {
-          const enr = await fastEnrich(packet.creator.website, { maxTotalMs: 4_000, perRequestMs: 2_500 });
+          const enr = await fastEnrich(enrichTarget, { maxTotalMs: 4_000, perRequestMs: 2_500 });
           if (enr.email) { contact.email = enr.email; counts.enrichment_success++; }
           if (enr.phone) contact.phone = enr.phone;
           if (enr.contact_form_url) contact.contact_form_url = enr.contact_form_url;

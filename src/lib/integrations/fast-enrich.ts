@@ -35,8 +35,11 @@ const EMAIL_LOCAL_BL = [
   'youremail', 'your.email',
 ];
 const PHONE_BL = [/^0{4,}/, /^1234/, /^1111/];
-const CONTACT_PATH_RE = /\/(contact|contact-us|get-in-touch|say-hello|hire|work-with|business|partnerships|sponsor|inquir|collab|about|team|support)\b/i;
-const LINK_IN_BIO_HOSTS = ['linktr.ee', 'beacons.ai', 'stan.store', 'bio.link', 'lnk.bio', 'hoo.be', 'msha.ke', 'flowcode.com', 'withkoji.com'];
+// Expanded pattern catches creator-specific monetization/contact pages:
+// consulting, services, media-kit, speaking engagements, affiliate programs,
+// application forms, newsletter signups, press inquiries, etc.
+const CONTACT_PATH_RE = /\/(contact|contact-us|get-in-touch|say-hello|hire|work-with(-me)?|business|partner(ship)?s?|sponsor(ship)?s?|inquir|collab|about|team|support|press|media(-kit)?|book(-a-call)?|consulting|services?|speaking|affiliates?|apply|enroll|start-here)\b/i;
+const LINK_IN_BIO_HOSTS = ['linktr.ee', 'beacons.ai', 'stan.store', 'bio.link', 'lnk.bio', 'hoo.be', 'msha.ke', 'flowcode.com', 'withkoji.com', 'tap.bio', 'bento.me', 'carrd.co', 'komi.io', 'snipfeed.co'];
 const USER_AGENT = 'Mozilla/5.0 (compatible; InfluencerDashboard/1.0; +https://propaccount.com/bot)';
 
 export interface FastEnrichResult {
@@ -86,6 +89,35 @@ function concat(chunks: Uint8Array[]): Uint8Array {
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.length; }
   return out;
+}
+
+/**
+ * Given a URL that failed to fetch, build up to 3 alternate URLs that might
+ * work: toggle the www prefix and swap http/https. Most sites redirect to
+ * their canonical form, but a minority will reject one variant outright.
+ */
+function buildUrlAlternates(original: string): string[] {
+  try {
+    const u = new URL(original);
+    const host = u.hostname;
+    const hasWww = host.startsWith('www.');
+    const stripped = hasWww ? host.slice(4) : host;
+    const wwwVersion = hasWww ? host : `www.${host}`;
+    const origProto = u.protocol;
+    const altProto = origProto === 'https:' ? 'http:' : 'https:';
+
+    const alternates: string[] = [];
+    const path = u.pathname + u.search;
+    // Toggle www
+    alternates.push(`${origProto}//${hasWww ? stripped : wwwVersion}${path}`);
+    // Toggle protocol
+    alternates.push(`${altProto}//${host}${path}`);
+    // Toggle both
+    alternates.push(`${altProto}//${hasWww ? stripped : wwwVersion}${path}`);
+    return [...new Set(alternates)].filter(a => a !== original);
+  } catch {
+    return [];
+  }
 }
 
 function htmlToText(html: string): string {
@@ -236,9 +268,10 @@ function collectLinks(html: string, baseUrl: string): LinkInventory {
     }
   }
 
-  // Cap sub-page fan-out
-  out.contactUrls = out.contactUrls.slice(0, 4);
-  out.linkInBioUrls = out.linkInBioUrls.slice(0, 2);
+  // Cap sub-page fan-out (increased from 4/2 to 6/3 for creator-type sites
+  // which tend to have more monetization/contact pages worth scanning)
+  out.contactUrls = out.contactUrls.slice(0, 6);
+  out.linkInBioUrls = out.linkInBioUrls.slice(0, 3);
   return out;
 }
 
@@ -268,14 +301,27 @@ export interface FastEnrichOpts {
  * Checks: root → /contact, /about, /footer-detected sub-pages, link-in-bio.
  * Stops as soon as an email is found or the time budget is exhausted.
  */
-export async function fastEnrich(url: string, opts?: FastEnrichOpts): Promise<FastEnrichResult> {
+export async function fastEnrich(urlInput: string, opts?: FastEnrichOpts): Promise<FastEnrichResult> {
+  let url = urlInput;
   const { maxTotalMs = 6_000, perRequestMs = 3_500 } = opts ?? {};
   const result = emptyResult();
   const start = Date.now();
   const remaining = () => Math.max(0, maxTotalMs - (Date.now() - start));
 
   try {
-    const rootHtml = await fetchHtml(url, Math.min(perRequestMs, remaining()));
+    let rootHtml = await fetchHtml(url, Math.min(perRequestMs, remaining()));
+
+    // Protocol retry: if the original URL failed, try alternates. Common
+    // causes: server only accepts https, or www prefix is required.
+    if (!rootHtml && remaining() > 1500) {
+      const alternates = buildUrlAlternates(url);
+      for (const alt of alternates) {
+        if (remaining() < 1500) break;
+        rootHtml = await fetchHtml(alt, Math.min(perRequestMs, remaining()));
+        if (rootHtml) { url = alt; break; }
+      }
+    }
+
     if (!rootHtml) return result;
 
     merge(result, rootHtml, 'root');
@@ -297,10 +343,12 @@ export async function fastEnrich(url: string, opts?: FastEnrichOpts): Promise<Fa
     if (subUrls.length === 0 || remaining() < 500) return result;
 
     const timeLeft = remaining();
-    const per = Math.min(perRequestMs, Math.max(1500, Math.floor(timeLeft / Math.max(1, Math.min(subUrls.length, 3)))));
+    // Allow up to 6 parallel sub-fetches with slightly tighter per-request budget
+    const toFetch = subUrls.slice(0, 6);
+    const per = Math.min(perRequestMs, Math.max(1200, Math.floor(timeLeft / Math.max(1, Math.min(toFetch.length, 4)))));
 
     const results = await Promise.all(
-      subUrls.slice(0, 4).map(async entry => {
+      toFetch.map(async entry => {
         if (remaining() < 300) return { html: null, source: entry.source };
         const html = await fetchHtml(entry.url, per);
         return { html, source: entry.source };
