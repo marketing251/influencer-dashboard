@@ -20,7 +20,7 @@
  */
 
 import { log } from '../logger';
-import { extractCrossPlatformHandle, type CrossPlatformCandidate } from './google-search';
+import { extractCrossPlatformHandle, type CrossPlatformCandidate } from './brave-search';
 
 const USER_AGENT = 'InfluencerDashboard/1.0 by /u/propaccount (+https://propaccount.com)';
 

@@ -1,48 +1,55 @@
 /**
- * Google Custom Search JSON API integration.
+ * Brave Search API integration.
  *
- * Uses a Programmable Search Engine (cx) scoped to known creator directories
- * (instagram.com, linkedin.com, medium.com, reddit.com, tradingview.com, etc.)
- * to dynamically discover trading influencer profiles every refresh.
+ * Replaces the previous Google Custom Search (CSE) backend. Brave offers
+ * a true "search the entire web" API — Google deprecated that capability
+ * for new Programmable Search Engines in late 2025, which made CSE unusable
+ * for broad creator discovery.
+ *
+ * Docs: https://api.search.brave.com/app/documentation/web-search/get-started
  *
  * Env vars:
- *   - GOOGLE_CLOUD_API_KEY — Google Cloud API key with Custom Search API enabled
- *   - GOOGLE_CSE_CX         — Programmable Search Engine ID
+ *   - BRAVE_SEARCH_API_KEY — subscription token from https://api.search.brave.com
  *
- * Quota: 100 free queries/day, then $5 per 1,000 (max 10,000/day).
- * Docs: https://developers.google.com/custom-search/v1/using_rest
+ * Pricing: $5 per 1,000 queries on the Search plan, $5/month credit included
+ * (~1,000 free queries/month). 50 QPS rate limit — well above what we use.
+ *
+ * Public API surface is intentionally kept stable (same function names as
+ * callers expected) so the refactor from CSE → Brave is a near drop-in:
+ *   webSearch, webSearchMany, discoverAcrossPlatforms,
+ *   isWebSearchConfigured, extractCrossPlatformHandle.
  */
 
 import { log } from '../logger';
 
-const BASE = 'https://customsearch.googleapis.com/customsearch/v1';
+const BASE = 'https://api.search.brave.com/res/v1/web/search';
 
-export interface GoogleSearchResult {
+export interface WebSearchResult {
   title: string;
   url: string;
   snippet: string;
+  /** Hostname derived from the URL (mirrors CSE's `displayLink`). */
   displayLink: string;
 }
 
-export function isGoogleSearchConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_CLOUD_API_KEY && process.env.GOOGLE_CSE_CX);
+export function isWebSearchConfigured(): boolean {
+  return Boolean(process.env.BRAVE_SEARCH_API_KEY);
 }
 
-interface CSEItem {
+interface BraveWebResult {
   title?: string;
-  link?: string;
-  snippet?: string;
-  displayLink?: string;
+  url?: string;
+  description?: string;
 }
 
-interface CSEResponse {
-  items?: CSEItem[];
-  searchInformation?: { totalResults?: string };
-  error?: { code: number; message: string };
+interface BraveResponse {
+  web?: { results?: BraveWebResult[] };
+  // Brave surfaces errors as an HTTP status + JSON body; no `error` field
+  // on 2xx responses. Any non-2xx is handled via res.ok below.
 }
 
-export interface GoogleSearchOpts {
-  /** Number of results per query, 1-10 (Google max). Default 10. */
+export interface WebSearchOpts {
+  /** Number of results per query, 1-20 (Brave max). Default 10. */
   num?: number;
   /** Abort signal (propagates to fetch). */
   signal?: AbortSignal;
@@ -50,21 +57,27 @@ export interface GoogleSearchOpts {
   timeoutMs?: number;
 }
 
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
 /**
- * Run a single Google Custom Search query.
+ * Run a single Brave web search query.
  * Returns an empty array on any failure — the refresh pipeline never crashes
- * just because Google's quota or network flaked.
+ * just because Brave's quota or network flaked.
  */
-export async function googleSearch(query: string, opts: GoogleSearchOpts = {}): Promise<GoogleSearchResult[]> {
-  if (!isGoogleSearchConfigured()) return [];
+export async function webSearch(query: string, opts: WebSearchOpts = {}): Promise<WebSearchResult[]> {
+  if (!isWebSearchConfigured()) return [];
   const { num = 10, signal, timeoutMs = 8_000 } = opts;
 
   const url = new URL(BASE);
-  url.searchParams.set('key', process.env.GOOGLE_CLOUD_API_KEY as string);
-  url.searchParams.set('cx', process.env.GOOGLE_CSE_CX as string);
   url.searchParams.set('q', query);
-  url.searchParams.set('num', String(Math.min(Math.max(num, 1), 10)));
-  url.searchParams.set('safe', 'active');
+  url.searchParams.set('count', String(Math.min(Math.max(num, 1), 20)));
+  url.searchParams.set('safesearch', 'moderate');
 
   try {
     // Combine external signal with a local timeout
@@ -72,52 +85,72 @@ export async function googleSearch(query: string, opts: GoogleSearchOpts = {}): 
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
-    const res = await fetch(url.toString(), { signal: ctrl.signal });
+    const res = await fetch(url.toString(), {
+      headers: {
+        Accept: 'application/json',
+        'Accept-Encoding': 'gzip',
+        'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY as string,
+      },
+      signal: ctrl.signal,
+    });
     clearTimeout(timer);
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      log.warn('google-search: request failed', { status: res.status, body: body.slice(0, 200) });
+      log.warn('brave-search: request failed', { status: res.status, body: body.slice(0, 200) });
       return [];
     }
 
-    const data = (await res.json()) as CSEResponse;
-    if (data.error) {
-      log.warn('google-search: api error', { code: data.error.code, message: data.error.message });
-      return [];
-    }
+    const data = (await res.json()) as BraveResponse;
+    const results = data.web?.results ?? [];
 
-    return (data.items ?? []).map(item => ({
-      title: item.title ?? '',
-      url: item.link ?? '',
-      snippet: item.snippet ?? '',
-      displayLink: item.displayLink ?? '',
-    })).filter(r => r.url);
+    return results
+      .map(item => ({
+        title: item.title ?? '',
+        url: item.url ?? '',
+        snippet: item.description ?? '',
+        displayLink: hostnameOf(item.url ?? ''),
+      }))
+      .filter(r => r.url);
   } catch (err) {
-    log.debug('google-search: fetch failed', { query: query.slice(0, 60), error: String(err) });
+    log.debug('brave-search: fetch failed', { query: query.slice(0, 60), error: String(err) });
     return [];
   }
 }
 
 /**
- * Run multiple queries in parallel with a concurrency cap.
+ * Run multiple queries with a concurrency cap.
+ *
+ * Brave's free/low tier is 1 QPS — we default to concurrency 1 with a
+ * minimum spacing so we don't trip rate limits. Paid Search plan allows
+ * 50 QPS; callers on paid tiers can bump `concurrency` explicitly.
+ *
  * Returns all unique results, deduplicated by URL.
  */
-export async function googleSearchMany(
+export async function webSearchMany(
   queries: string[],
-  opts: GoogleSearchOpts & { concurrency?: number } = {},
-): Promise<GoogleSearchResult[]> {
-  if (!isGoogleSearchConfigured() || queries.length === 0) return [];
-  const concurrency = Math.min(opts.concurrency ?? 4, queries.length);
+  opts: WebSearchOpts & { concurrency?: number } = {},
+): Promise<WebSearchResult[]> {
+  if (!isWebSearchConfigured() || queries.length === 0) return [];
+  const concurrency = Math.min(opts.concurrency ?? 2, queries.length);
 
   const seen = new Set<string>();
-  const results: GoogleSearchResult[] = [];
+  const results: WebSearchResult[] = [];
   let i = 0;
+  let lastStart = 0;
+  const minSpacingMs = 250; // ~4 QPS ceiling per worker; with concurrency=2 → ~8 QPS total (well under 50)
 
   const workers = Array.from({ length: concurrency }, async () => {
     while (i < queries.length) {
       const idx = i++;
-      const items = await googleSearch(queries[idx], opts);
+      // Simple spacing so bursts don't flood Brave's rate limiter
+      const elapsed = Date.now() - lastStart;
+      if (elapsed < minSpacingMs) {
+        await new Promise(r => setTimeout(r, minSpacingMs - elapsed));
+      }
+      lastStart = Date.now();
+
+      const items = await webSearch(queries[idx], opts);
       for (const item of items) {
         if (!seen.has(item.url)) {
           seen.add(item.url);
@@ -128,19 +161,14 @@ export async function googleSearchMany(
   });
 
   await Promise.all(workers);
-  log.info('google-search: many done', { queries: queries.length, unique: results.length });
+  log.info('brave-search: many done', { queries: queries.length, unique: results.length });
   return results;
 }
 
 /**
- * Trading-focused query templates per platform.
- * Each query is crafted to surface educator/mentor/influencer profiles
- * on the target social site.
- */
-/**
  * Tiered creator-intent queries for per-platform discovery.
- * Ordered Tier 1 → Tier 4 so the query cap naturally prioritizes
- * monetized creators (highest email yield) over lower tiers.
+ * Retained for any caller that wants IG/LinkedIn-flavored query bundles.
+ * The live cross-platform pipeline uses CROSS_PLATFORM_QUERIES below.
  */
 export const TRADING_QUERIES = {
   instagram: [
@@ -186,14 +214,10 @@ export const TRADING_QUERIES = {
 } as const;
 
 /**
- * Cross-platform queries used by `discoverAcrossPlatforms`.
- * These don't site-restrict on the query side — the CSE engine already
- * covers instagram/linkedin/twitter/youtube/reddit/medium/etc., and we
- * classify each result by its hostname.
- */
-/**
  * Cross-platform queries — tiered, Tier 1 first.
- * These search across all sites in the CSE engine (IG, LI, X, YT, Reddit, etc.)
+ * Searches the whole web; results are classified by hostname via
+ * `extractCrossPlatformHandle` so a single query surfaces IG, LinkedIn,
+ * X, YouTube, Reddit, StockTwits, Telegram, and Discord candidates.
  */
 export const CROSS_PLATFORM_QUERIES = [
   // Tier 1: Monetized creators (50% of cross-platform budget)
@@ -230,9 +254,9 @@ export interface CrossPlatformCandidate {
 }
 
 /**
- * Pull handles for multiple platforms out of a single CSE result URL.
+ * Pull handles for multiple platforms out of a single search result URL.
  * Returns null for URLs we can't classify or for non-profile pages
- * (post URLs, tag pages, etc.).
+ * (post URLs, tag pages, etc.). Pure function — no network.
  */
 export function extractCrossPlatformHandle(url: string, title = ''): CrossPlatformCandidate | null {
   let parsed: URL;
@@ -376,19 +400,20 @@ function cleanResultTitle(title: string): string {
 }
 
 /**
- * Run CSE across all trading queries and return handles for every platform
- * we can classify. The same result URL is only returned once.
+ * Run Brave search across all cross-platform queries and return handles
+ * for every platform we can classify. The same result URL is only
+ * returned once.
  *
  * This is the heavy lifter for cross-platform discovery — a single call
  * surfaces IG, LinkedIn, X, YouTube, StockTwits, Telegram, and Discord
- * candidates in one shot, reusing the existing CSE engine configuration.
+ * candidates in one shot.
  */
 export async function discoverAcrossPlatforms(
-  opts: GoogleSearchOpts & { concurrency?: number; queries?: readonly string[] } = {},
+  opts: WebSearchOpts & { concurrency?: number; queries?: readonly string[] } = {},
 ): Promise<CrossPlatformCandidate[]> {
-  if (!isGoogleSearchConfigured()) return [];
+  if (!isWebSearchConfigured()) return [];
   const queries = opts.queries ?? CROSS_PLATFORM_QUERIES;
-  const results = await googleSearchMany([...queries], opts);
+  const results = await webSearchMany([...queries], opts);
 
   const seen = new Set<string>(); // `${platform}::${handle.toLowerCase()}`
   const out: CrossPlatformCandidate[] = [];
@@ -401,7 +426,7 @@ export async function discoverAcrossPlatforms(
     out.push(cand);
   }
 
-  log.info('google-search: cross-platform done', {
+  log.info('brave-search: cross-platform done', {
     queries: queries.length,
     rawResults: results.length,
     candidates: out.length,

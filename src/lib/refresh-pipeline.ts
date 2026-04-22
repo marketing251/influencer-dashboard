@@ -39,7 +39,7 @@ import { fastEnrich, isPlaceholderEmail, extractEmailFromBio } from './integrati
 import { extractLinkInBioUrl } from './social-links';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
-import { discoverAcrossPlatforms, isGoogleSearchConfigured, type CrossPlatformCandidate } from './integrations/google-search';
+import { discoverAcrossPlatforms, isWebSearchConfigured, type CrossPlatformCandidate } from './integrations/brave-search';
 import { discoverViaReddit, isRedditConfigured } from './integrations/reddit-discovery';
 import { verifyCandidate } from './verification';
 import type { Platform } from './types';
@@ -103,7 +103,7 @@ export interface RefreshSources {
   x_expansion: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   instagram_web: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   linkedin_web: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
-  google_cse: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
+  web_search: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
   reddit: { discovered: number; status: 'ok' | 'skipped' | 'error'; note?: string };
 }
 
@@ -157,7 +157,7 @@ function emptySources(): RefreshSources {
     x_expansion: { discovered: 0, status: 'ok' },
     instagram_web: { discovered: 0, status: 'ok' },
     linkedin_web: { discovered: 0, status: 'ok' },
-    google_cse: { discovered: 0, status: 'ok' },
+    web_search: { discovered: 0, status: 'ok' },
     reddit: { discovered: 0, status: 'ok' },
   };
 }
@@ -544,22 +544,22 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     })());
   }
 
-  // Google CSE
-  if (isGoogleSearchConfigured()) {
+  // Web search (Brave)
+  if (isWebSearchConfigured()) {
     secondaryTasks.push((async () => {
       try {
-        const candidates = await discoverAcrossPlatforms({ concurrency: 4, timeoutMs: 8_000, signal: secondarySignal });
+        const candidates = await discoverAcrossPlatforms({ concurrency: 2, timeoutMs: 8_000, signal: secondarySignal });
         const converted = candidates.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
-        sources.google_cse = { discovered: converted.length, status: 'ok' };
+        sources.web_search = { discovered: converted.length, status: 'ok' };
         counts.discovered += converted.length;
         pendingCandidates.push(...converted);
       } catch (err) {
-        sources.google_cse = { discovered: 0, status: 'error', note: String(err) };
+        sources.web_search = { discovered: 0, status: 'error', note: String(err) };
         counts.errors++;
       }
     })());
   } else {
-    sources.google_cse = { discovered: 0, status: 'skipped', note: 'GOOGLE_CLOUD_API_KEY / GOOGLE_CSE_CX not set' };
+    sources.web_search = { discovered: 0, status: 'skipped', note: 'BRAVE_SEARCH_API_KEY not set' };
   }
 
   // Reddit
@@ -977,8 +977,8 @@ function crossPlatformToPacket(c: CrossPlatformCandidate): CandidatePacket | nul
       name: c.name || c.handle,
       slug: c.handle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
       website: null,
-      bio: `Discovered via ${c.sourceTitle.startsWith('r/') ? 'Reddit' : 'Google CSE'}: ${c.sourceTitle}`.slice(0, 500),
-      source_type: c.sourceTitle.startsWith('r/') ? 'reddit' : 'google_cse',
+      bio: `Discovered via ${c.sourceTitle.startsWith('r/') ? 'Reddit' : 'Brave Search'}: ${c.sourceTitle}`.slice(0, 500),
+      source_type: c.sourceTitle.startsWith('r/') ? 'reddit' : 'web_search',
       source_url: c.sourceUrl,
       account: {
         platform, handle: c.handle, profile_url: c.profileUrl,

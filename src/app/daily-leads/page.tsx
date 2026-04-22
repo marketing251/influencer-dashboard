@@ -11,7 +11,7 @@ import type { Creator, CreatorAccount } from '@/lib/types';
 type CreatorWithAccounts = Creator & { accounts: CreatorAccount[] };
 type RefreshStatus = 'idle' | 'running' | 'success' | 'error';
 
-type SourceKey = 'youtube' | 'x' | 'instagram_web' | 'linkedin_web' | 'google_cse' | 'reddit';
+type SourceKey = 'youtube' | 'x' | 'instagram_web' | 'linkedin_web' | 'web_search' | 'reddit';
 type SourceStatus = 'ok' | 'skipped' | 'error';
 interface SourceInfo { discovered: number; status: SourceStatus; note?: string }
 type SourceMap = Partial<Record<SourceKey, SourceInfo>>;
@@ -373,10 +373,10 @@ const SOURCE_LABELS: Record<SourceKey, string> = {
   x: 'X',
   instagram_web: 'Instagram',
   linkedin_web: 'LinkedIn',
-  google_cse: 'Google CSE',
+  web_search: 'Web Search',
   reddit: 'Reddit',
 };
-const SOURCE_ORDER: SourceKey[] = ['youtube', 'x', 'instagram_web', 'linkedin_web', 'google_cse', 'reddit'];
+const SOURCE_ORDER: SourceKey[] = ['youtube', 'x', 'instagram_web', 'linkedin_web', 'web_search', 'reddit'];
 
 function SourcesStrip({ sources }: { sources: SourceMap }) {
   const entries = SOURCE_ORDER

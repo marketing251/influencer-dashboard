@@ -15,7 +15,7 @@
  *   sources: {
  *     youtube:    { status: "ok" | "error" | "skipped", message, sample?, duration_ms },
  *     x:          { ... },
- *     google_cse: { ... },
+ *     web_search: { ... },
  *     reddit:     { ... },
  *     knowledge_graph: { ... },
  *     natural_language: { ... },
@@ -27,7 +27,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { googleSearch, isGoogleSearchConfigured } from '@/lib/integrations/google-search';
+import { webSearch, isWebSearchConfigured } from '@/lib/integrations/brave-search';
 import { knowledgeGraphLookup, isKnowledgeGraphConfigured } from '@/lib/integrations/google-knowledge-graph';
 import { classifyText, isNaturalLanguageConfigured } from '@/lib/integrations/google-natural-language';
 import { getRedditAccessToken, isRedditConfigured } from '@/lib/integrations/reddit-discovery';
@@ -107,41 +107,43 @@ export async function GET() {
       : { status: 'ok', message: `Returned ${(result as { count: number }).count} tweets`, sample: result, duration_ms: ms };
   }
 
-  // ─── Google Custom Search (CSE) ───────────────────────────────────
-  if (!isGoogleSearchConfigured()) {
-    report.google_cse = skipped('GOOGLE_CLOUD_API_KEY or GOOGLE_CSE_CX not set');
+  // ─── Web search (Brave) ───────────────────────────────────────────
+  if (!isWebSearchConfigured()) {
+    report.web_search = skipped('BRAVE_SEARCH_API_KEY not set');
   } else {
     const { result, error, ms } = await timed(async () => {
       // Direct call, bypassing the wrapper's swallowed errors so we see the real response
-      const url = new URL('https://customsearch.googleapis.com/customsearch/v1');
-      url.searchParams.set('key', process.env.GOOGLE_CLOUD_API_KEY as string);
-      url.searchParams.set('cx', process.env.GOOGLE_CSE_CX as string);
+      const url = new URL('https://api.search.brave.com/res/v1/web/search');
       url.searchParams.set('q', 'forex trader mentor');
-      url.searchParams.set('num', '5');
-      const res = await fetch(url.toString());
+      url.searchParams.set('count', '5');
+      url.searchParams.set('safesearch', 'moderate');
+      const res = await fetch(url.toString(), {
+        headers: {
+          Accept: 'application/json',
+          'Accept-Encoding': 'gzip',
+          'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY as string,
+        },
+      });
       const bodyText = await res.text();
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0, 400)}`);
       const data = JSON.parse(bodyText) as {
-        items?: { title: string; link: string }[];
-        searchInformation?: { totalResults?: string };
-        error?: { code: number; message: string };
+        web?: { results?: { title: string; url: string; description: string }[] };
       };
-      if (data.error) throw new Error(`API error ${data.error.code}: ${data.error.message}`);
+      const items = data.web?.results ?? [];
       return {
-        count: data.items?.length ?? 0,
-        totalResults: data.searchInformation?.totalResults,
-        firstThreeUrls: (data.items ?? []).slice(0, 3).map(i => i.link),
+        count: items.length,
+        firstThreeUrls: items.slice(0, 3).map(i => i.url),
       };
     });
-    report.google_cse = error
+    report.web_search = error
       ? { status: 'error', message: error, duration_ms: ms }
       : { status: 'ok', message: `Returned ${(result as { count: number }).count} results`, sample: result, duration_ms: ms };
   }
 
   // Wrapper test — confirms the wrapper layer still works
-  if (isGoogleSearchConfigured()) {
-    const { result, error, ms } = await timed(async () => googleSearch('forex trader mentor', { num: 5 }));
-    report.google_cse_wrapper = error
+  if (isWebSearchConfigured()) {
+    const { result, error, ms } = await timed(async () => webSearch('forex trader mentor', { num: 5 }));
+    report.web_search_wrapper = error
       ? { status: 'error', message: error, duration_ms: ms }
       : {
           status: (result as unknown[])?.length > 0 ? 'ok' : 'error',
@@ -228,7 +230,6 @@ export async function GET() {
       youtube_api_key: Boolean(process.env.YOUTUBE_API_KEY),
       x_bearer_token: Boolean(process.env.X_BEARER_TOKEN),
       google_cloud_api_key: Boolean(process.env.GOOGLE_CLOUD_API_KEY),
-      google_cse_cx: Boolean(process.env.GOOGLE_CSE_CX),
       google_kg_api_key: Boolean(process.env.GOOGLE_KG_API_KEY),
       google_nl_api_key: Boolean(process.env.GOOGLE_NL_API_KEY),
       reddit_client_id: Boolean(process.env.REDDIT_CLIENT_ID),
