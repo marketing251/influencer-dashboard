@@ -48,7 +48,7 @@ CREATE TABLE creators (
 CREATE TABLE creator_accounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   creator_id UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
-  platform TEXT NOT NULL CHECK (platform IN ('youtube', 'x', 'instagram', 'tiktok', 'twitch', 'discord', 'telegram', 'linkedin')),
+  platform TEXT NOT NULL CHECK (platform IN ('youtube', 'x', 'instagram', 'tiktok', 'twitch', 'discord', 'telegram', 'linkedin', 'website')),
   handle TEXT NOT NULL,
   profile_url TEXT,
   followers BIGINT DEFAULT 0,
@@ -188,6 +188,18 @@ CREATE INDEX IF NOT EXISTS idx_creators_prop_status ON creators(excluded_from_le
 CREATE UNIQUE INDEX IF NOT EXISTS idx_creators_email_unique
   ON creators(LOWER(public_email)) WHERE public_email IS NOT NULL;
 
+-- ═══════════════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════════════
+-- MIGRATION: Allow 'website' as a platform for creator_accounts
+-- Run this on existing databases to add the new platform value.
+-- ═══════════════════════════════════════════════════════════════════
+--
+-- ALTER TABLE creator_accounts DROP CONSTRAINT IF EXISTS creator_accounts_platform_check;
+-- ALTER TABLE creator_accounts
+--   ADD CONSTRAINT creator_accounts_platform_check
+--   CHECK (platform IN ('youtube', 'x', 'instagram', 'tiktok', 'twitch', 'discord', 'telegram', 'linkedin', 'website'));
+--
 -- ═══════════════════════════════════════════════════════════════════
 
 -- Migration helper: add columns to existing table if upgrading

@@ -27,19 +27,28 @@ function analyzeText(texts: (string | null | undefined)[]) {
 }
 
 /**
- * STRICT contact gate: a lead MUST have email or phone to be inserted.
+ * Permissive contact gate: a lead must have SOME contactable vector.
  *
- * This is deliberately strict — website-only, contact-form-only, and
- * profile-only leads are rejected. The pipeline enriches every candidate
- * with a website BEFORE this check runs (Phase 1b for X, Phase 3 for
- * secondary sources), so by the time we get here, the `contact.email`
- * field has been populated if the website yielded an email.
+ * Accepts any of: email, phone, contact_form URL, or a website domain.
+ * A website alone is enough — once a lead is in the DB we can follow up
+ * by crawling deeper pages, retrying fast-enrich later, or manually
+ * sending to a generic `info@` / `hello@` address.
  *
- * Enforced at insert — updates are unrestricted because the lead already exists.
+ * Previous behavior required email OR phone, which rejected ~45% of
+ * candidates even when they had a working website (observed: 132 of 291
+ * rejected in one refresh). That was the single biggest bottleneck to
+ * hitting 50-100 leads/day.
+ *
+ * `with_email` / `with_phone` / `with_contact_form` counters on the
+ * summary still track quality — loosening the gate doesn't lower the
+ * bar for what we *call* a qualified lead, it just stops discarding
+ * candidates that might yield contact info on a later refresh pass.
  */
 function hasContactPath(data: DiscoveredCreator): boolean {
   if (data.contact?.email) return true;
   if (data.contact?.phone) return true;
+  if (data.contact?.contact_form_url) return true;
+  if (data.website) return true;
   return false;
 }
 

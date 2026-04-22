@@ -215,12 +215,18 @@ export const TRADING_QUERIES = {
 
 /**
  * Cross-platform queries — tiered, Tier 1 first.
- * Searches the whole web; results are classified by hostname via
- * `extractCrossPlatformHandle` so a single query surfaces IG, LinkedIn,
- * X, YouTube, Reddit, StockTwits, Telegram, and Discord candidates.
+ * Searches the whole web; social profile URLs route through
+ * `extractCrossPlatformHandle` and non-social URLs route through
+ * `classifyBraveResult` → website-first leads. Between the two pathways
+ * we capture virtually every result Brave returns (the old CSE dropped
+ * ~80% of results because creator websites weren't social hosts).
+ *
+ * Expanded from 16 → 60 queries to cover more niches, geographies,
+ * and funnel-intent variants. Adaptive allocation (future work) will
+ * prioritize the best performers once keyword_performance accumulates.
  */
 export const CROSS_PLATFORM_QUERIES = [
-  // Tier 1: Monetized creators (50% of cross-platform budget)
+  // ─── Tier 1: Monetized creators (course/mentorship intent) ────────
   'trading course mentor enroll',
   'forex mentor coaching session',
   'trading discord VIP signals',
@@ -229,17 +235,65 @@ export const CROSS_PLATFORM_QUERIES = [
   'trading academy mentorship program',
   'free trading course signals',
   'trading bootcamp course review',
-  // Tier 2: Authority
+  'options trading mentor course',
+  'day trading coach one on one',
+  'swing trading mentor program',
+  'futures trading coach academy',
+  'crypto trading course enroll',
+  'forex signals telegram premium',
+  'trading psychology coach private',
+  'stock trading mentorship join',
+  // ─── Tier 1b: Niche-specific monetization ─────────────────────────
+  'ICT concepts mentor course',
+  'smart money concepts mentor course',
+  'supply demand trading mentor',
+  'price action coach mentorship',
+  'volume profile trading mentor',
+  'elliott wave trading mentor',
+  'scalping mentor trader course',
+  // ─── Tier 2: Authority / proof-of-results ─────────────────────────
   'live trading session results',
   'funded trader journey proof',
   'trading results proof payout',
-  // Tier 3: Education
+  'six figure trader educator',
+  'full time trader lifestyle coach',
+  'prop firm payout proof mentor',
+  'seven figure trader mentor',
+  'funded trader challenge pass coach',
+  // ─── Tier 3: Education / strategy ─────────────────────────────────
   'price action strategy tutorial',
   'smart money concepts explained',
   'trading psychology discipline coach',
-  // Tier 4: Prop-adjacent
+  'options flow strategy educator',
+  'risk management trading coach',
+  'trading journal review educator',
+  'technical analysis mentor tutorial',
+  'algorithmic trading educator python',
+  'order flow trading mentor',
+  // ─── Tier 4: Prop-adjacent ────────────────────────────────────────
   'prop firm review honest experience',
   'how to pass prop firm challenge',
+  'prop firm affiliate coach review',
+  'top prop firm for funded traders',
+  'prop firm comparison educator',
+  'best prop firm challenge strategy',
+  // ─── Tier 5: Geo / demo variants ──────────────────────────────────
+  'UK forex trader mentor coach',
+  'US day trader mentor coach',
+  'Australia forex educator course',
+  'Singapore trading coach academy',
+  'Dubai forex trader mentor',
+  'Canada stock trading educator',
+  'South Africa forex mentor course',
+  // ─── Tier 6: Funnel intent / CTAs ─────────────────────────────────
+  'book a call trading coach',
+  'apply for trading mentorship',
+  'trading mentor free discovery call',
+  'join our trading discord free',
+  'skool trading community join',
+  'whop trading signals community',
+  'trading course early bird enroll',
+  'trading mentor application form',
 ];
 
 // ─── Multi-platform discovery ───────────────────────────────────────
@@ -400,43 +454,138 @@ function cleanResultTitle(title: string): string {
 }
 
 /**
- * Run Brave search across all cross-platform queries and return handles
- * for every platform we can classify. The same result URL is only
- * returned once.
- *
- * This is the heavy lifter for cross-platform discovery — a single call
- * surfaces IG, LinkedIn, X, YouTube, StockTwits, Telegram, and Discord
- * candidates in one shot.
+ * Legacy social-only discovery. Prefer `discoverAll()` which returns
+ * both social and website-first leads from a single Brave pass.
+ * Retained for any future caller that only wants social candidates.
  */
 export async function discoverAcrossPlatforms(
   opts: WebSearchOpts & { concurrency?: number; queries?: readonly string[] } = {},
 ): Promise<CrossPlatformCandidate[]> {
-  if (!isWebSearchConfigured()) return [];
-  const queries = opts.queries ?? CROSS_PLATFORM_QUERIES;
-  const results = await webSearchMany([...queries], opts);
-
-  const seen = new Set<string>(); // `${platform}::${handle.toLowerCase()}`
-  const out: CrossPlatformCandidate[] = [];
-  for (const r of results) {
-    const cand = extractCrossPlatformHandle(r.url, r.title);
-    if (!cand) continue;
-    const key = `${cand.platform}::${cand.handle.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(cand);
-  }
-
-  log.info('brave-search: cross-platform done', {
-    queries: queries.length,
-    rawResults: results.length,
-    candidates: out.length,
-    byPlatform: countByPlatform(out),
-  });
-  return out;
+  const { socialCandidates } = await discoverAll(opts);
+  return socialCandidates;
 }
 
 function countByPlatform(list: CrossPlatformCandidate[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const c of list) counts[c.platform] = (counts[c.platform] ?? 0) + 1;
   return counts;
+}
+
+// ─── Website-first leads ────────────────────────────────────────────
+
+/**
+ * A Brave result that didn't match a known social-profile URL pattern.
+ * These are direct creator websites, marketplace listings, blog posts,
+ * or listicles. The refresh pipeline fast-enriches each URL to pull
+ * contact info + social links and upserts them with `platform='website'`.
+ */
+export interface WebsiteLead {
+  websiteUrl: string;
+  domain: string;
+  title: string;
+  snippet: string;
+  sourceQuery?: string;
+}
+
+/**
+ * Hosts we NEVER want as website-first leads — either they're social
+ * (handled by extractCrossPlatformHandle) or they're aggregators /
+ * directories / SEO-farms that don't correspond to a single creator.
+ */
+const WEBSITE_LEAD_HOST_DENYLIST = new Set([
+  // Social platforms (already handled by extractCrossPlatformHandle)
+  'instagram.com', 'linkedin.com', 'twitter.com', 'x.com',
+  'youtube.com', 'youtu.be', 'reddit.com', 'tiktok.com',
+  'facebook.com', 'threads.net', 'pinterest.com',
+  'stocktwits.com', 't.me', 'discord.com', 'discord.gg',
+  // Marketplaces / directories / aggregators (not a creator)
+  'fiverr.com', 'upwork.com', 'guru.com', 'clarity.fm',
+  'tradersunion.com', 'investopedia.com', 'wikipedia.org',
+  'medium.com', 'substack.com', 'tumblr.com', 'blogspot.com',
+  'quora.com', 'stackoverflow.com', 'github.com',
+  'amazon.com', 'ebay.com', 'etsy.com', 'apple.com', 'google.com',
+  'bing.com', 'yahoo.com', 'duckduckgo.com',
+  'nytimes.com', 'bloomberg.com', 'reuters.com', 'cnbc.com',
+  'forbes.com', 'businessinsider.com', 'yahoo-finance.com',
+  // Misc infra / tech
+  'cloudflare.com', 'vercel.app', 'netlify.app', 'herokuapp.com',
+]);
+
+function isWebsiteLeadCandidate(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+    if (WEBSITE_LEAD_HOST_DENYLIST.has(host)) return false;
+    // Also reject any subdomain of the denylist (e.g. shop.fiverr.com)
+    for (const banned of WEBSITE_LEAD_HOST_DENYLIST) {
+      if (host.endsWith(`.${banned}`)) return false;
+    }
+    // Require at least one dot + reasonable length (rejects raw IPs)
+    if (!host.includes('.') || host.length < 5 || host.length > 80) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Unified single-pass discovery — runs Brave once across all queries
+ * and classifies each result into either a social-profile candidate
+ * (handled via `extractCrossPlatformHandle`) or a website-first lead
+ * (direct creator domain, fast-enriched downstream).
+ *
+ * This is the preferred entry point. Single API pass, two output
+ * arrays. Dedupes social by `platform::handle` and websites by domain.
+ */
+export async function discoverAll(
+  opts: WebSearchOpts & {
+    concurrency?: number;
+    queries?: readonly string[];
+    maxWebsiteLeads?: number;
+  } = {},
+): Promise<{ socialCandidates: CrossPlatformCandidate[]; websiteLeads: WebsiteLead[] }> {
+  if (!isWebSearchConfigured()) return { socialCandidates: [], websiteLeads: [] };
+  const queries = opts.queries ?? CROSS_PLATFORM_QUERIES;
+  const maxWebsiteLeads = opts.maxWebsiteLeads ?? 200;
+  const results = await webSearchMany([...queries], opts);
+
+  const seenSocial = new Set<string>();
+  const socialCandidates: CrossPlatformCandidate[] = [];
+  const seenDomain = new Set<string>();
+  const websiteLeads: WebsiteLead[] = [];
+
+  for (const r of results) {
+    const social = extractCrossPlatformHandle(r.url, r.title);
+    if (social) {
+      const key = `${social.platform}::${social.handle.toLowerCase()}`;
+      if (!seenSocial.has(key)) {
+        seenSocial.add(key);
+        socialCandidates.push(social);
+      }
+      continue;
+    }
+    if (websiteLeads.length >= maxWebsiteLeads) continue;
+    if (!isWebsiteLeadCandidate(r.url)) continue;
+    let domain: string;
+    try {
+      domain = new URL(r.url).hostname.toLowerCase().replace(/^www\./, '');
+    } catch { continue; }
+    if (seenDomain.has(domain)) continue;
+    seenDomain.add(domain);
+    // Prefer the bare root URL — fast-enrich will crawl sub-pages
+    websiteLeads.push({
+      websiteUrl: `https://${domain}/`,
+      domain,
+      title: r.title,
+      snippet: r.snippet,
+    });
+  }
+
+  log.info('brave-search: discoverAll done', {
+    queries: queries.length,
+    rawResults: results.length,
+    socialCandidates: socialCandidates.length,
+    websiteLeads: websiteLeads.length,
+    byPlatform: countByPlatform(socialCandidates),
+  });
+  return { socialCandidates, websiteLeads };
 }

@@ -39,7 +39,7 @@ import { fastEnrich, isPlaceholderEmail, extractEmailFromBio } from './integrati
 import { extractLinkInBioUrl } from './social-links';
 import { knowledgeGraphBest, isKnowledgeGraphConfigured } from './integrations/google-knowledge-graph';
 import { classifyNicheWithNL, isNaturalLanguageConfigured } from './integrations/google-natural-language';
-import { discoverAcrossPlatforms, isWebSearchConfigured, type CrossPlatformCandidate } from './integrations/brave-search';
+import { discoverAll, isWebSearchConfigured, type CrossPlatformCandidate, type WebsiteLead } from './integrations/brave-search';
 import { discoverViaReddit, isRedditConfigured } from './integrations/reddit-discovery';
 import { verifyCandidate } from './verification';
 import type { Platform } from './types';
@@ -544,15 +544,21 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     })());
   }
 
-  // Web search (Brave)
+  // Web search (Brave) — both social handles AND website-first leads
   if (isWebSearchConfigured()) {
     secondaryTasks.push((async () => {
       try {
-        const candidates = await discoverAcrossPlatforms({ concurrency: 2, timeoutMs: 8_000, signal: secondarySignal });
-        const converted = candidates.map(crossPlatformToPacket).filter((p): p is CandidatePacket => p !== null);
-        sources.web_search = { discovered: converted.length, status: 'ok' };
-        counts.discovered += converted.length;
-        pendingCandidates.push(...converted);
+        const { socialCandidates, websiteLeads } = await discoverAll({
+          concurrency: 2, timeoutMs: 8_000, signal: secondarySignal, maxWebsiteLeads: 200,
+        });
+        const socialConverted = socialCandidates
+          .map(crossPlatformToPacket)
+          .filter((p): p is CandidatePacket => p !== null);
+        const websiteConverted = websiteLeads.map(websiteLeadToPacket);
+        const total = socialConverted.length + websiteConverted.length;
+        sources.web_search = { discovered: total, status: 'ok' };
+        counts.discovered += total;
+        pendingCandidates.push(...socialConverted, ...websiteConverted);
       } catch (err) {
         sources.web_search = { discovered: 0, status: 'error', note: String(err) };
         counts.errors++;
@@ -983,6 +989,46 @@ function crossPlatformToPacket(c: CrossPlatformCandidate): CandidatePacket | nul
       account: {
         platform, handle: c.handle, profile_url: c.profileUrl,
         followers: 0, platform_id: c.handle, bio: '', verified: false,
+      },
+    },
+    posts: [],
+  };
+}
+
+/**
+ * Convert a Brave website-first lead into a CandidatePacket.
+ *
+ * These are non-social URLs (creator websites, landing pages, etc.)
+ * that Brave surfaced as top results. We assign `platform='website'`
+ * so they have a valid account row, using the domain as handle +
+ * platform_id for domain-based dedup. Downstream fast-enrich will
+ * scrape the site for name, email, phone, and social links.
+ */
+function websiteLeadToPacket(lead: WebsiteLead): CandidatePacket {
+  const handle = lead.domain.toLowerCase();
+  // Clean the page title: strip trailing " | site name", " - brand", etc.
+  const rawTitle = (lead.title ?? '').trim();
+  const cleaned = rawTitle
+    .replace(/\s*[\|\-–·•]\s*.*$/, '')
+    .replace(/\s+\(?(?:home|homepage|official\s+site|home\s+page)\)?$/i, '')
+    .trim();
+  const name = (cleaned || lead.domain).slice(0, 100);
+  return {
+    creator: {
+      name,
+      slug: handle.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      website: lead.websiteUrl,
+      bio: (`Discovered via Brave Search: ${lead.title || lead.domain}`).slice(0, 500),
+      source_type: 'web_search',
+      source_url: lead.websiteUrl,
+      account: {
+        platform: 'website',
+        handle,
+        profile_url: lead.websiteUrl,
+        followers: 0,
+        platform_id: handle, // domain acts as the unique platform_id
+        bio: (lead.snippet || '').slice(0, 500),
+        verified: false,
       },
     },
     posts: [],
