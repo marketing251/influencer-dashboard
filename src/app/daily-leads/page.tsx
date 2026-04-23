@@ -289,7 +289,7 @@ function DailyLeadsContent() {
       )}
       {refreshStatus === 'success' && refreshStats && (
         <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9" style={{ background: 'var(--bg-card)' }}>
+          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10" style={{ background: 'var(--bg-card)' }}>
             <MetricCell value={refreshStats.attempted} label="Attempted" />
             <MetricCell value={refreshStats.inserted} label="Inserted" accent />
             <MetricCell value={refreshStats.duplicates} label="Duplicates" />
@@ -298,6 +298,7 @@ function DailyLeadsContent() {
             <MetricCell value={refreshStats.withForm} label="Contact Form" />
             <MetricCell value={refreshStats.rejected} label="Rejected" />
             <MetricCell value={refreshStats.excludedPropFirm} label="Prop Firms" />
+            <MetricCell value={refreshStats.errors} label="Errors" danger={refreshStats.errors > 0} />
             <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
               <div className="text-[13px] font-mono" style={{ color: 'var(--text-secondary)' }}>{refreshStats.elapsedSec}s</div>
               <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>Elapsed</div>
@@ -359,10 +360,15 @@ function Spinner({ large }: { large?: boolean }) {
 }
 function ErrorIcon() { return <svg className="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" /></svg>; }
 
-function MetricCell({ value, label, accent }: { value: number; label: string; accent?: boolean }) {
+function MetricCell({ value, label, accent, danger }: { value: number; label: string; accent?: boolean; danger?: boolean }) {
+  const color = danger
+    ? 'var(--accent-red, #ef4444)'
+    : accent
+      ? 'var(--accent-gold)'
+      : 'var(--text-primary)';
   return (
     <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
-      <div className="text-[16px] font-semibold tabular-nums" style={{ color: accent ? 'var(--accent-gold)' : 'var(--text-primary)' }}>{value}</div>
+      <div className="text-[16px] font-semibold tabular-nums" style={{ color }}>{value}</div>
       <div className="text-[9px] uppercase tracking-widest mt-0.5" style={{ color: 'var(--text-muted)' }}>{label}</div>
     </div>
   );

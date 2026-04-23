@@ -359,6 +359,43 @@ export function addToIndex(
   if (entry.email) index.emails.add(entry.email.toLowerCase());
 }
 
+/**
+ * Insert a new creator_account row under an existing creator.
+ * Used when the creator already exists (matched by domain or email)
+ * but has no account row for the platform we just discovered them on.
+ *
+ * Returns the new account id, or null if insertion failed (e.g. unique
+ * constraint on (platform, handle) — another candidate may have created
+ * the same account in a race).
+ */
+async function insertAccountUnderCreator(
+  creatorId: string,
+  account: DiscoveredCreator['account'],
+  now: string,
+): Promise<{ id: string } | null> {
+  try {
+    const { data } = await supabaseAdmin
+      .from('creator_accounts')
+      .insert({
+        creator_id: creatorId,
+        platform: account.platform,
+        handle: account.handle,
+        platform_id: account.platform_id || account.handle,
+        profile_url: account.profile_url,
+        followers: account.followers ?? 0,
+        bio: account.bio ?? '',
+        verified: account.verified ?? false,
+        created_at: now,
+        updated_at: now,
+      })
+      .select('id')
+      .single();
+    return data ? { id: data.id } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertCreator(
   data: DiscoveredCreator,
   posts?: DiscoveredPost[],
@@ -392,7 +429,37 @@ export async function upsertCreator(
           const { data: acc } = await supabaseAdmin
             .from('creator_accounts').select('id')
             .eq('creator_id', match.id).eq('platform', data.account.platform).maybeSingle();
-          if (acc) existing = { creator_id: match.id, id: acc.id };
+          if (acc) {
+            existing = { creator_id: match.id, id: acc.id };
+          } else {
+            // Domain-matched creator exists but no account for this platform yet.
+            // Insert a new account row under the existing creator so we go down
+            // the update path instead of creating a duplicate creator.
+            const newAcc = await insertAccountUnderCreator(match.id, data.account, now);
+            if (newAcc) existing = { creator_id: match.id, id: newAcc.id };
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // Email-based matching — catches cases where the same creator appears via
+    // a different platform or different URL structure but enrichment pulled
+    // the same email. Also prevents the unique email index from blocking inserts.
+    if (!existing && data.contact?.email) {
+      try {
+        const email = data.contact.email.toLowerCase();
+        const { data: emailMatch } = await supabaseAdmin
+          .from('creators').select('id').ilike('public_email', email).maybeSingle();
+        if (emailMatch) {
+          const { data: acc } = await supabaseAdmin
+            .from('creator_accounts').select('id')
+            .eq('creator_id', emailMatch.id).eq('platform', data.account.platform).maybeSingle();
+          if (acc) {
+            existing = { creator_id: emailMatch.id, id: acc.id };
+          } else {
+            const newAcc = await insertAccountUnderCreator(emailMatch.id, data.account, now);
+            if (newAcc) existing = { creator_id: emailMatch.id, id: newAcc.id };
+          }
         }
       } catch { /* skip */ }
     }
