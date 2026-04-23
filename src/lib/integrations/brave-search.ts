@@ -337,6 +337,24 @@ export const CROSS_PLATFORM_QUERIES = [
   'trading for a living educator',
   'financial freedom trader mentor',
   'consistent profitable trader coach',
+  // ─── Tier 12: Distilled from hand-curated trader list (2026) ──────
+  // Language patterns actual trading educators use on their sites +
+  // terminology their audiences search for. Should surface their peers.
+  'synthetic indices trader mentor',
+  'institutional trading concepts mentor',
+  'order flow trading mentor',
+  'volume price analysis trader coach',
+  'trend following forex mentor',
+  'ICT smart money concepts mentor',
+  'forex academy lifestyle mentor',
+  'funded account trader mentor',
+  'prop firm challenge breakdown trader',
+  'trader psychology mentor course',
+  'forex trading academy enroll',
+  'live trading room mentor signals',
+  'pip hunter forex mentor',
+  'systematic forex strategy trader',
+  'one to one trading mentor coach',
 ];
 
 // ─── Multi-platform discovery ───────────────────────────────────────
