@@ -31,6 +31,10 @@ interface RefreshStats {
   withForm: number;
   excludedPropFirm: number;
   errors: number;
+  /** Cross-source duplicates + pre-discovery known-match: candidates
+   *  skipped BEFORE reaching upsertCreator. Normal operation — surfacing
+   *  this makes the Attempted math balance. */
+  deduped: number;
   errorSamples: ErrorSample[];
   elapsedSec: number;
   timestamp: string;
@@ -50,6 +54,8 @@ interface RefreshProgressEvent {
   excluded_prop_firm?: number;
   errors?: number;
   error_samples?: ErrorSample[];
+  skipped_seen_this_run?: number;
+  skipped_known_before_enrichment?: number;
   batch_index?: number;
   batch_total?: number;
   elapsed_ms?: number;
@@ -198,6 +204,7 @@ function DailyLeadsContent() {
       withForm: lastEvent.with_form ?? 0,
       excludedPropFirm: lastEvent.excluded_prop_firm ?? 0,
       errors: lastEvent.errors ?? 0,
+      deduped: (lastEvent.skipped_seen_this_run ?? 0) + (lastEvent.skipped_known_before_enrichment ?? 0),
       errorSamples: lastEvent.error_samples ?? [],
       elapsedSec: Math.round((lastEvent.elapsed_ms ?? 0) / 1000),
       timestamp: new Date().toLocaleTimeString(),
@@ -297,7 +304,7 @@ function DailyLeadsContent() {
       )}
       {refreshStatus === 'success' && refreshStats && (
         <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-10" style={{ background: 'var(--bg-card)' }}>
+          <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-11" style={{ background: 'var(--bg-card)' }}>
             <MetricCell value={refreshStats.attempted} label="Attempted" />
             <MetricCell value={refreshStats.inserted} label="Inserted" accent />
             <MetricCell value={refreshStats.duplicates} label="Duplicates" />
@@ -306,6 +313,7 @@ function DailyLeadsContent() {
             <MetricCell value={refreshStats.withForm} label="Contact Form" />
             <MetricCell value={refreshStats.rejected} label="Rejected" />
             <MetricCell value={refreshStats.excludedPropFirm} label="Prop Firms" />
+            <MetricCell value={refreshStats.deduped} label="Deduped" />
             <MetricCell value={refreshStats.errors} label="Errors" danger={refreshStats.errors > 0} />
             <div className="px-3 py-2.5 text-center" style={{ borderRight: '1px solid var(--border-subtle)' }}>
               <div className="text-[13px] font-mono" style={{ color: 'var(--text-secondary)' }}>{refreshStats.elapsedSec}s</div>

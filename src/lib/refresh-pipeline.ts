@@ -559,7 +559,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     secondaryTasks.push((async () => {
       try {
         const { socialCandidates, websiteLeads } = await discoverAll({
-          concurrency: 2, timeoutMs: 8_000, signal: secondarySignal, maxWebsiteLeads: 200,
+          concurrency: 3, timeoutMs: 8_000, signal: secondarySignal, maxWebsiteLeads: 400,
         });
         const socialConverted = socialCandidates
           .map(crossPlatformToPacket)

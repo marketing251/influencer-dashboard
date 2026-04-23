@@ -72,7 +72,9 @@ function hostnameOf(url: string): string {
  */
 export async function webSearch(query: string, opts: WebSearchOpts = {}): Promise<WebSearchResult[]> {
   if (!isWebSearchConfigured()) return [];
-  const { num = 10, signal, timeoutMs = 8_000 } = opts;
+  // Default 15 results/query (up from 10) surfaces tail creators without
+  // increasing Brave query count (pricing is per-query, not per-result).
+  const { num = 15, signal, timeoutMs = 8_000 } = opts;
 
   const url = new URL(BASE);
   url.searchParams.set('q', query);
@@ -294,6 +296,47 @@ export const CROSS_PLATFORM_QUERIES = [
   'whop trading signals community',
   'trading course early bird enroll',
   'trading mentor application form',
+  // ─── Tier 7: Archetypes / creator backgrounds ─────────────────────
+  'former hedge fund trader mentor',
+  'ex investment banker trading coach',
+  'retired floor trader educator',
+  'self taught trader course',
+  'millionaire trader mentor',
+  'professional trader coaching',
+  'full time forex trader mentor',
+  'trading veteran educator',
+  // ─── Tier 8: Asset-class specialists ──────────────────────────────
+  'futures day trader mentor course',
+  'options seller mentor wheel strategy',
+  '0DTE options trader mentor',
+  'SPX scalping mentor coach',
+  'bitcoin trader mentor course',
+  'ethereum defi trader educator',
+  'commodities trader mentor coach',
+  'gold silver trader educator',
+  'indices trader mentor',
+  'emini futures mentor trader',
+  // ─── Tier 9: Format / distribution channel ────────────────────────
+  'trading podcast host interview',
+  'trading newsletter substack mentor',
+  'trading YouTube channel mentor',
+  'trading blog educator contact',
+  'trading ebook author mentor',
+  'trading webinar host educator',
+  'trading masterclass author',
+  // ─── Tier 10: Review / recommendation queries ─────────────────────
+  'best trading mentor review',
+  'top trading course reviewed',
+  'best forex course 2026 review',
+  'best day trading course review',
+  'trading mentor comparison',
+  'trading coach testimonials student',
+  'trading course alumni review',
+  // ─── Tier 11: Outcome / aspiration ────────────────────────────────
+  'quit my job trading mentor',
+  'trading for a living educator',
+  'financial freedom trader mentor',
+  'consistent profitable trader coach',
 ];
 
 // ─── Multi-platform discovery ───────────────────────────────────────
