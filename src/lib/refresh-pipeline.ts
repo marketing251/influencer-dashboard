@@ -125,6 +125,9 @@ export interface RefreshResult extends RefreshProgress {
   email_rate: number;
   enrichment_rate: number;
   stopped_reason: 'completed' | 'time_budget' | 'aborted';
+  /** Top 5 error messages by frequency — surfaces silent upsert failures
+   *  so we can debug without digging into Vercel runtime logs. */
+  error_samples?: Array<{ message: string; count: number }>;
 }
 
 export interface RefreshOpts {
@@ -189,6 +192,13 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
   const startedIso = new Date(started).toISOString();
   const counts = emptyCounts();
   const sources = emptySources();
+  // Collect unique error messages from silent upsert failures so we can
+  // surface them in the summary instead of losing them to Vercel log retention.
+  const errorCounts = new Map<string, number>();
+  const bumpError = (msg: string): void => {
+    const key = (msg || 'unknown').slice(0, 140);
+    errorCounts.set(key, (errorCounts.get(key) ?? 0) + 1);
+  };
 
   const deadline = started + timeBudgetMs;
   const remaining = () => Math.max(0, deadline - Date.now());
@@ -759,11 +769,21 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       } else if (result.action === 'skipped') {
         if (result.error === 'no_contact_path') { counts.rejected++; counts.hard_filtered++; }
         else if (result.error === 'is_prop_firm') counts.excluded_prop_firm++;
-        else counts.errors++;
+        else {
+          counts.errors++;
+          bumpError(result.error ?? 'unknown_skip_error');
+          log.warn('refresh-pipeline: upsert skipped with error', {
+            name: creator.name,
+            platform: creator.account.platform,
+            error: result.error,
+          });
+        }
       }
     } catch (err) {
       counts.errors++;
-      log.warn('refresh-pipeline: upsert failed', { name: creator.name, error: String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      bumpError(msg);
+      log.warn('refresh-pipeline: upsert failed', { name: creator.name, error: msg });
     }
 
     // Track in run-level seen set regardless of upsert outcome
@@ -938,6 +958,10 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
     const completedIso = new Date().toISOString();
     const emailRate = counts.inserted > 0 ? counts.with_email / counts.inserted : 0;
     const enrichRate = counts.enrichment_attempts > 0 ? counts.enrichment_success / counts.enrichment_attempts : 0;
+    const errorSamples = Array.from(errorCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([message, count]) => ({ message, count }));
     const result: RefreshResult = {
       ...counts, phase: 'done',
       message: reason === 'completed'
@@ -952,6 +976,7 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       email_rate: Math.round(emailRate * 100) / 100,
       enrichment_rate: Math.round(enrichRate * 100) / 100,
       stopped_reason: reason,
+      error_samples: errorSamples.length > 0 ? errorSamples : undefined,
     };
     emit('done', result.message);
     log.info('refresh-pipeline: done', {
@@ -963,6 +988,8 @@ export async function runRefreshPipeline(opts: RefreshOpts = {}): Promise<Refres
       skipped_known: counts.skipped_known_before_enrichment,
       skipped_seen: counts.skipped_seen_this_run,
       enrichment_saved: counts.enrichment_skipped_known,
+      errors: counts.errors,
+      error_samples: errorSamples,
     });
     return result;
   }

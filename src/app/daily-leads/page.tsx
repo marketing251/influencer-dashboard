@@ -16,6 +16,11 @@ type SourceStatus = 'ok' | 'skipped' | 'error';
 interface SourceInfo { discovered: number; status: SourceStatus; note?: string }
 type SourceMap = Partial<Record<SourceKey, SourceInfo>>;
 
+interface ErrorSample {
+  message: string;
+  count: number;
+}
+
 interface RefreshStats {
   attempted: number;
   inserted: number;
@@ -26,6 +31,7 @@ interface RefreshStats {
   withForm: number;
   excludedPropFirm: number;
   errors: number;
+  errorSamples: ErrorSample[];
   elapsedSec: number;
   timestamp: string;
   sources: SourceMap;
@@ -43,6 +49,7 @@ interface RefreshProgressEvent {
   with_form?: number;
   excluded_prop_firm?: number;
   errors?: number;
+  error_samples?: ErrorSample[];
   batch_index?: number;
   batch_total?: number;
   elapsed_ms?: number;
@@ -191,6 +198,7 @@ function DailyLeadsContent() {
       withForm: lastEvent.with_form ?? 0,
       excludedPropFirm: lastEvent.excluded_prop_firm ?? 0,
       errors: lastEvent.errors ?? 0,
+      errorSamples: lastEvent.error_samples ?? [],
       elapsedSec: Math.round((lastEvent.elapsed_ms ?? 0) / 1000),
       timestamp: new Date().toLocaleTimeString(),
       sources: lastEvent.sources ?? {},
@@ -305,6 +313,9 @@ function DailyLeadsContent() {
             </div>
           </div>
           <SourcesStrip sources={refreshStats.sources} />
+          {refreshStats.errorSamples.length > 0 && (
+            <ErrorSamplesStrip samples={refreshStats.errorSamples} />
+          )}
         </div>
       )}
       {refreshStatus === 'error' && refreshError && (
@@ -416,6 +427,40 @@ function SourcesStrip({ sources }: { sources: SourceMap }) {
           </span>
         );
       })}
+    </div>
+  );
+}
+
+function ErrorSamplesStrip({ samples }: { samples: ErrorSample[] }) {
+  if (samples.length === 0) return null;
+  return (
+    <div
+      className="flex flex-wrap items-start gap-2 border-t px-3 py-2"
+      style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-secondary)' }}
+    >
+      <span
+        className="text-[9px] uppercase tracking-widest pt-1"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        Top Errors
+      </span>
+      <div className="flex flex-col gap-1 flex-1 min-w-0">
+        {samples.map((s, i) => (
+          <div
+            key={i}
+            className="flex items-start gap-2 text-[11px] font-mono"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <span
+              className="inline-flex items-center justify-center rounded px-1.5 py-[1px] text-[10px] tabular-nums flex-shrink-0"
+              style={{ background: 'var(--error-bg, rgba(239,68,68,0.15))', color: 'var(--error, #ef4444)' }}
+            >
+              {s.count}×
+            </span>
+            <span className="truncate" title={s.message}>{s.message}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
