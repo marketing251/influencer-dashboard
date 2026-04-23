@@ -34,6 +34,7 @@ export interface Creator {
   source_url: string | null;
   is_prop_firm: boolean;
   excluded_from_leads: boolean;
+  hidden_from_daily_leads: boolean;
   lead_score: number;
   confidence_score: number;
   notes: string | null;
@@ -144,4 +145,8 @@ export interface CreatorFilters {
   search?: string;
   sort_by?: 'lead_score' | 'followers' | 'created_at' | 'first_seen_at' | 'confidence_score' | 'name';
   sort_order?: 'asc' | 'desc';
+  /** Default 'visible' excludes soft-hidden rows. 'hidden' shows only
+   *  dismissed rows; 'all' shows both. Dedup/exclusion index is never
+   *  affected — hidden rows remain in the DB and still block re-insert. */
+  visibility?: 'visible' | 'hidden' | 'all';
 }

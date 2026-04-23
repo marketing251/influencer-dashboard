@@ -107,6 +107,10 @@ function DailyLeadsContent() {
   const [view, setView] = useState<'table' | 'grid'>('table');
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>('idle');
   const [refreshStats, setRefreshStats] = useState<RefreshStats | null>(null);
+  /** When true, the refresh summary card is visible. Set true automatically
+   *  on refresh completion; set false only when the user clicks its X. No
+   *  auto-dismiss timeout. Next refresh resets this back to true. */
+  const [summaryVisible, setSummaryVisible] = useState(false);
   const [refreshError, setRefreshError] = useState('');
   const [progress, setProgress] = useState<ProgressState>(INITIAL_PROGRESS);
   const [diagnose, setDiagnose] = useState<DiagnoseReport | null>(null);
@@ -126,6 +130,9 @@ function DailyLeadsContent() {
     setRefreshStatus('running');
     setRefreshError('');
     setProgress(INITIAL_PROGRESS);
+    // New run → summary becomes eligible to display again; it'll turn on
+    // once results come back. Clearing prior stats avoids stale numbers.
+    setSummaryVisible(true);
 
     let lastEvent: RefreshProgressEvent | null = null;
 
@@ -225,8 +232,32 @@ function DailyLeadsContent() {
     }
 
     fetchCreators();
-    setTimeout(() => setRefreshStatus(s => s === 'success' ? 'idle' : s), 15000);
+    // Summary stays visible until the user clicks its X — no auto-dismiss.
   };
+
+  /**
+   * Soft-hide a creator from the Daily Leads list. PATCHes the row's
+   * `hidden_from_daily_leads` flag, then optimistically drops it from
+   * the local list so the UI updates instantly. The creator remains in
+   * the DB and continues to block re-insertion via the exclusion index.
+   */
+  const handleDismissCreator = useCallback(async (id: string) => {
+    // Optimistic remove first for snappy UX
+    setCreators(prev => prev.filter(c => c.id !== id));
+    try {
+      const res = await fetch(`/api/creators/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hidden_from_daily_leads: true }),
+      });
+      if (!res.ok) {
+        // Revert on failure
+        fetchCreators();
+      }
+    } catch {
+      fetchCreators();
+    }
+  }, [fetchCreators]);
 
   const handleDiagnose = async () => {
     setDiagnoseStatus('running');
@@ -302,8 +333,22 @@ function DailyLeadsContent() {
       {refreshStatus === 'running' && (
         <RefreshProgressBanner progress={progress} />
       )}
-      {refreshStatus === 'success' && refreshStats && (
-        <div className="rounded-[var(--radius)] overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+      {refreshStatus === 'success' && refreshStats && summaryVisible && (
+        <div className="rounded-[var(--radius)] overflow-hidden relative" style={{ border: '1px solid var(--border)' }}>
+          <button
+            type="button"
+            onClick={() => setSummaryVisible(false)}
+            aria-label="Dismiss refresh summary"
+            title="Dismiss summary"
+            className="absolute left-2 top-2 z-10 inline-flex h-5 w-5 items-center justify-center rounded transition-colors"
+            style={{ color: 'var(--text-muted)', background: 'transparent' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+          >
+            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
           <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-11" style={{ background: 'var(--bg-card)' }}>
             <MetricCell value={refreshStats.attempted} label="Attempted" />
             <MetricCell value={refreshStats.inserted} label="Inserted" accent />
@@ -362,7 +407,7 @@ function DailyLeadsContent() {
       ) : view === 'grid' ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{creators.map(c => <CreatorCard key={c.id} creator={c} />)}</div>
       ) : (
-        <CreatorTable creators={creators} />
+        <CreatorTable creators={creators} onDismiss={handleDismissCreator} />
       )}
     </div>
   );

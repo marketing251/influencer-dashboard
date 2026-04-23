@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     search: params.get('search') || undefined,
     sort_by: (params.get('sort_by') as CreatorFilters['sort_by']) || 'lead_score',
     sort_order: (params.get('sort_order') as CreatorFilters['sort_order']) || 'desc',
+    visibility: (params.get('visibility') as CreatorFilters['visibility']) || 'visible',
   };
 
   if (!isSupabaseConfigured()) return NextResponse.json([]);
@@ -36,6 +37,15 @@ export async function GET(request: NextRequest) {
 
   // Exclude prop firms from leads (we sell TO them, they're not prospects)
   query = query.neq('excluded_from_leads', true);
+
+  // User-triggered soft-hide from the Daily Leads UI.
+  // Dedup / exclusion-index is not affected (those run regardless of this flag).
+  if (filters.visibility === 'visible') {
+    query = query.neq('hidden_from_daily_leads', true);
+  } else if (filters.visibility === 'hidden') {
+    query = query.eq('hidden_from_daily_leads', true);
+  }
+  // 'all' → no filter
 
   if (filters.platform) query = query.contains('creator_accounts.platform', [filters.platform]);
   if (filters.min_followers) query = query.gte('total_followers', filters.min_followers);

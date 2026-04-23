@@ -25,6 +25,11 @@ const contactOptions = [
   { value: 'has_contact_form', label: 'Has Contact Form' },
   { value: 'has_any_contact', label: 'Has Any Contact' },
 ];
+const visibilityOptions = [
+  { value: '', label: 'Visible' },         // default — omit query param
+  { value: 'hidden', label: 'Hidden' },
+  { value: 'all', label: 'All' },
+];
 const toggles = [
   { key: 'has_course', label: 'Course' },
   { key: 'has_discord', label: 'Discord' },
@@ -74,6 +79,9 @@ export function Filters() {
         </select>
         <select value={activeContact} onChange={e => setContact(e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
           {contactOptions.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <select value={get('visibility')} onChange={e => set('visibility', e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
+          {visibilityOptions.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
         </select>
         <select value={get('sort_by') || 'lead_score'} onChange={e => set('sort_by', e.target.value)} className="border px-2.5 py-[7px] text-[13px]" style={sel}>
           {sortOptions.map(o => <option key={o.value} value={o.value}>Sort: {o.label}</option>)}

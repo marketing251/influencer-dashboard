@@ -1,7 +1,13 @@
 import Link from 'next/link';
 import type { Creator, CreatorAccount } from '@/lib/types';
 
-interface Props { creators: (Creator & { accounts: CreatorAccount[] })[] }
+interface Props {
+  creators: (Creator & { accounts: CreatorAccount[] })[];
+  /** When provided, each row shows a hover-revealed X to the left of the
+   *  name. Clicking calls this with the creator id so the parent can
+   *  PATCH `hidden_from_daily_leads: true` + optimistically hide. */
+  onDismiss?: (id: string) => void;
+}
 
 function fmt(n: number) {
   // 0 usually means "unknown" for IG/LinkedIn leads sourced via web search
@@ -27,7 +33,7 @@ const platformColor: Record<string, { bg: string; fg: string }> = {
 };
 const plLabel: Record<string, string> = { youtube:'YT', x:'X', instagram:'IG', linkedin:'LI', tiktok:'TT', discord:'DC', telegram:'TG', twitch:'TW' };
 
-export function CreatorTable({ creators }: Props) {
+export function CreatorTable({ creators, onDismiss }: Props) {
   if (!creators.length) return null;
 
   const th: React.CSSProperties = { color: 'var(--text-muted)', background: 'var(--bg-secondary)', borderColor: 'var(--border)', position: 'sticky', top: 0, zIndex: 10 };
@@ -51,13 +57,31 @@ export function CreatorTable({ creators }: Props) {
         </thead>
         <tbody>
           {creators.map(c => (
-            <tr key={c.id} className="transition-colors border-b" style={bd}
+            <tr key={c.id} className="group transition-colors border-b" style={bd}
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
 
-              {/* Creator name */}
+              {/* Creator name — with hover-revealed dismiss X to the left */}
               <td className="px-3 py-2.5">
-                <Link href={`/creators/${c.id}`} className="font-medium hover:underline" style={{ color: 'var(--text-primary)' }}>{c.name}</Link>
+                <div className="flex items-center gap-2">
+                  {onDismiss && (
+                    <button
+                      type="button"
+                      onClick={() => onDismiss(c.id)}
+                      aria-label={`Hide ${c.name} from Daily Leads`}
+                      title="Hide from Daily Leads (stays in DB)"
+                      className="opacity-0 group-hover:opacity-100 shrink-0 inline-flex items-center justify-center h-5 w-5 rounded transition-opacity"
+                      style={{ color: 'var(--text-muted)', background: 'transparent' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-card)'; e.currentTarget.style.color = 'var(--error, #ef4444)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
+                    >
+                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                  <Link href={`/creators/${c.id}`} className="font-medium hover:underline" style={{ color: 'var(--text-primary)' }}>{c.name}</Link>
+                </div>
               </td>
 
               {/* Platform badges */}

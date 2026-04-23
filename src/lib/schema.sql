@@ -34,6 +34,11 @@ CREATE TABLE creators (
   source_url TEXT,
   is_prop_firm BOOLEAN DEFAULT FALSE,
   excluded_from_leads BOOLEAN DEFAULT FALSE,
+  -- User-triggered soft-hide from the Daily Leads UI. The creator row stays
+  -- in the DB (so dedupe / exclusion index still sees them as known), but
+  -- the default Daily Leads query excludes them. Surfaced via the visibility
+  -- filter (Visible / Hidden / All).
+  hidden_from_daily_leads BOOLEAN DEFAULT FALSE,
   lead_score REAL DEFAULT 0,
   confidence_score REAL DEFAULT 0,
   notes TEXT,
@@ -188,6 +193,19 @@ CREATE INDEX IF NOT EXISTS idx_creators_prop_status ON creators(excluded_from_le
 CREATE UNIQUE INDEX IF NOT EXISTS idx_creators_email_unique
   ON creators(LOWER(public_email)) WHERE public_email IS NOT NULL;
 
+-- ═══════════════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════════════
+-- MIGRATION: User-triggered soft-hide from Daily Leads UI
+-- Adds a boolean column + partial index for the default-exclude path.
+-- Safe to re-run (IF NOT EXISTS).
+-- ═══════════════════════════════════════════════════════════════════
+--
+-- ALTER TABLE creators
+--   ADD COLUMN IF NOT EXISTS hidden_from_daily_leads BOOLEAN DEFAULT FALSE;
+-- CREATE INDEX IF NOT EXISTS idx_creators_hidden
+--   ON creators(hidden_from_daily_leads) WHERE hidden_from_daily_leads = TRUE;
+--
 -- ═══════════════════════════════════════════════════════════════════
 
 -- ═══════════════════════════════════════════════════════════════════
